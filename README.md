@@ -19,9 +19,14 @@ Free Pascal (v3.2.0) + Lazarus (v2.0.10)
 1. SQLite
 2. OpenSSL (v1.1.0 or higher)
 3. Zlib
-4. CommonUtils - you can download sources [here](https://github.com/iLya2IK/commonutils)
-5. WCHTTPServer - you can download sources [here](https://github.com/iLya2IK/wchttpserver)
 
-## Copyrights
+## Additional libraries (to build from sources)
+4. CommonUtils - you can download lpk and sources [here](https://github.com/iLya2IK/commonutils)
+5. WCHTTPServer - you can download lpk and sources [here](https://github.com/iLya2IK/wchttpserver)
+
+## Copyrights and contibutions
+* [SQLite - database engine](https://www.sqlite.org)
+* [OpenSSL - Cryptography and SSL/TLS Toolkit](https://www.openssl.org)
+* [Zlib - Compression Library](https://zlib.net/)
 * [CommonUtils - lightweight lists, collections, seqs and hashes, helping classes for sqlite3 extension, gz compression, data streams - Copyright (c) 2018-2021, Ilya Medvedkov](https://github.com/iLya2IK/commonutils)
 * [WCHTTPServer - Copyright (c) 2020-2021, Ilya Medvedkov](https://github.com/iLya2IK/wchttpserver)
