@@ -1,5 +1,7 @@
 {REST Web Camera server
 
+Copyright (c) 2022, Ilya Medvedkov
+
 The server operates in the REST architecture mode.
 The server can accept POST requests and respond with JSON objects.
 The server is designed to collect images from cameras (devices) and forwards
@@ -8,6 +10,10 @@ A detailed implementation of an external device based on "ESP32-CAM"
 is given in the example "webcamdevice".
 An example of a desktop application for external device controlling and
 viewing images is "webcamclientviewer".
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 }
 
 program wcrestwebcam;

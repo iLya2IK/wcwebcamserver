@@ -1,3 +1,8 @@
+{
+  This file is a part of example.
+  look more in WCRESTWebCam.lpr
+}
+
 unit WCRESTWebCamAppHelper;
 
 {$mode objfpc}{$H+}
@@ -66,6 +71,7 @@ var vRJServerConfigHelper : TRESTJsonConfigHelper = nil;
 constructor TRESTJsonIdleHelper.Create;
 begin
   MTick10s := GetTickCount64;
+  MTick60s := MTick10s;
   MinutTimer := 0;
 end;
 
