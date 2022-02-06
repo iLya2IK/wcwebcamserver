@@ -1,0 +1,1353 @@
+{
+  This file is a part of example.
+  look more in WCRESTWebCam.lpr
+}
+
+unit WCRESTWebCamJobs;
+
+{$mode objfpc}{$H+}
+
+interface
+
+uses
+  Classes, SysUtils, variants,
+  httpdefs, httpprotocol,
+  jsonscanner, jsonparser, fpjson,
+  ExtSqlite3DS,
+  db,
+  wcApplication;
+
+type
+
+  { TWCAddClient }
+
+  TWCAddClient = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCAddRecord }
+
+  TWCAddRecord = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCAddMsg }
+
+  TWCAddMsg = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCGetRecordMeta }
+
+  TWCGetRecordMeta = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCGetRecordData }
+
+  TWCGetRecordData = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCGetRecordCount }
+
+  TWCGetRecordCount = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCGetMsgs}
+
+  TWCGetMsgs = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCGetListOfDevices}
+
+  TWCGetListOfDevices = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCDeleteRecords }
+
+  TWCDeleteRecords = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCGetConfig }
+
+  TWCGetConfig = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCSetConfig }
+
+  TWCSetConfig = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCHeartBit }
+
+  TWCHeartBit = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TRESTWebCamUsersDB }
+
+  TRESTWebCamUsersDB = class(TWCHTTPAppInitHelper)
+  private
+    FUsersDB : TExtSqlite3Dataset;
+  public
+    PREP_GetClient,
+    PREP_AddClient, PREP_ReturnLastHsh,
+    PREP_GetListOfDevices,
+    PREP_AddRecord,
+
+    PREP_AddMsg,
+
+    PREP_GetLastSync,
+
+    PREP_GetRecordMeta,
+    PREP_GetRecordData,
+    PREP_GetRecordCount,
+    PREP_DeleteRecord,
+    PREP_DeleteRecordsFrom,
+    PREP_GetMsgs,
+    PREP_GetClientByHash,
+
+    PREP_MaintainStep1,
+    PREP_MaintainStep2,
+    PREP_MaintainStep3,
+    PREP_MaintainStepSelect4,
+    PREP_MaintainStep4,
+    PREP_MaintainStepUpdate4,
+    PREP_MaintainStep5,
+    PREP_MaintainStep6,
+    PREP_MaintainStep7,
+
+    PREP_ConfSetFloat,
+    PREP_ConfSetText,
+    PREP_GetConf,
+
+    PREP_UpdateSession: TSqlite3Prepared;
+    constructor Create;
+    procedure DoHelp({%H-}aData : TObject); override;
+    destructor Destroy; override;
+
+    procedure Execute(const Str : String);
+
+    procedure MaintainStep10s;
+    procedure MaintainStep60s;
+    procedure MaintainStep1hr;
+
+    class function UsersDB : TRESTWebCamUsersDB;
+  end;
+
+  { TSessionHashFunc }
+
+  TSessionHashFunc = class(TSqlite3Function)
+  public
+    constructor Create;
+    procedure ScalarFunc(argc : integer); override;
+  end;
+
+  TDeviceId = record
+    id : integer;
+    device : String;
+  end;
+
+implementation
+
+uses wcutils, WCRESTWebCamAppHelper, sha1, base64, ExtSqliteUtils;
+
+const ERR_UNSPECIFIED       = 1;
+      ERR_INTERNAL_UNK      = 2;
+      ERR_DATABASE_FAIL     = 3;
+      ERR_JSON_PARSER_FAIL  = 4;
+      ERR_JSON_FAIL         = 5;
+      ERR_NO_SUCH_SESSION   = 6;
+      ERR_NO_SUCH_USER      = 7;
+      ERR_NO_DEVICES        = 8;
+      ERR_NO_SUCH_RECORD    = 9;
+      ERR_NO_DATA_RETURNED  = 10;
+      ERR_EMPTY_REQUEST     = 11;
+      ERR_MALFORMED_REQUEST = 12;
+
+const BAD_JSON = '{"result":"BAD","code":1}';
+      OK_JSON  = '{"result":"OK"}';
+      BAD_JSON_INTERNAL_UNK      = '{"result":"BAD","code":2}';
+      BAD_JSON_DATABASE_FAIL     = '{"result":"BAD","code":3}';
+      BAD_JSON_JSON_PARSER_FAIL  = '{"result":"BAD","code":4}';
+      BAD_JSON_JSON_FAIL         = '{"result":"BAD","code":5}';
+      BAD_JSON_NO_SUCH_SESSION   = '{"result":"BAD","code":6}';
+      BAD_JSON_NO_SUCH_USER      = '{"result":"BAD","code":7}';
+      BAD_JSON_NO_DEVICES        = '{"result":"BAD","code":8}';
+      BAD_JSON_NO_SUCH_RECORD    = '{"result":"BAD","code":9}';
+      BAD_JSON_NO_DATA_RETURNED  = '{"result":"BAD","code":10}';
+      BAD_JSON_EMPTY_REQUEST     = '{"result":"BAD","code":11}';
+      BAD_JSON_MALFORMED_REQUEST = '{"result":"BAD","code":12}';
+
+      cOK = 'OK';
+
+      cMSG       = 'msg';
+      cMSGS      = 'msgs';
+      cRECORDS   = 'records';
+      cRESULT    = 'result';
+      cNAME      = 'name';
+      cPASS      = 'pass';
+      cSHASH     = 'shash';
+      cMETA      = 'meta';
+      cREC       = 'record';
+      cSTAMP     = 'stamp';
+      cRID       = 'rid';
+      cMID       = 'mid';
+      cSYNC      = 'sync';
+      cDEVICE    = 'device';
+      cDEVICES   = 'devices';
+      cTARGET    = 'target';
+      cPARAMS    = 'params';
+      cCONFIG    = 'config';
+      cKIND      = 'kind';
+      cDESCR     = 'descr';
+      cMIVALUE   = 'miv';
+      cMAVALUE   = 'mav';
+      cDEFVALUE  = 'dv';
+      cFVALUE    = 'fv';
+      SessionHash_GUID = AnsiString('4343726B-7F18-4D21-9297-1CC52FFA6F04');
+
+var MAX_ALLOWED_CONFIG_KIND : integer;
+var vUsersDB : TRESTWebCamUsersDB = nil;
+
+function GenSessionHash(const aKey: AnsiString): AnsiString;
+var
+  Outstream : TStringStream;
+  Encoder   : TBase64EncodingStream;
+  sha1: TSHA1Digest;
+begin
+  sha1 := SHA1String(aKey + SessionHash_GUID);
+  Outstream:=TStringStream.Create('');
+  try
+    Encoder:=TBase64EncodingStream.create(outstream);
+    try
+      Encoder.Write(PByte(@sha1)^, 20);
+    finally
+      Encoder.Free;
+    end;
+    Result:=Outstream.DataString;
+  finally
+    Outstream.free;
+  end;
+end;
+
+function GetClientId(const sIP, sHash : String) : TDeviceId;
+var
+  Res : Array [0..2] of Variant;
+begin
+  try
+    if Length(sHash) > 0 then
+    begin
+      if vUsersDB.PREP_GetClientByHash.ExecToValue([sHash], @Res) = erOkWithData then
+      begin
+        if SameText(sIP, Res[2]) then
+        begin
+          Result.id := Res[0];
+          Result.device := Res[1];
+          vUsersDB.PREP_UpdateSession.Execute([sHash]);
+        end else
+          Result.id := -1;
+      end else
+        Result.id := -1;
+    end else
+      Result.id := -1;
+  except
+    Result.id := -1;
+  end;
+end;
+
+function HeartBit(const sIP, sHash : String) : String;
+var
+  cid : TDeviceId;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+      Result := OK_JSON
+    else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function AddClient(const Name, Passw, aDevice, aIP : String) : String;
+var
+  jsonObj : TJSONObject;
+  cid : integer;
+begin
+  try
+    if assigned(vUsersDB.PREP_ReturnLastHsh) then
+    begin
+      cid := 0;
+      vUsersDB.PREP_ReturnLastHsh.Lock;
+      try
+        if vUsersDB.PREP_GetClient.ExecToValue([Name, Passw],
+                                               @cid,
+                                               sizeof(cid)) = erOkWithData then
+        begin
+          vUsersDB.PREP_AddClient.Execute([cid, aDevice, aIP]);
+          Result := vUsersDB.PREP_ReturnLastHsh.QuickQuery([cid, aDevice], nil, false);
+        end else
+          Exit(BAD_JSON_NO_SUCH_USER);
+      finally
+        vUsersDB.PREP_ReturnLastHsh.UnLock;
+      end;
+    end else
+      Result := vUsersDB.PREP_AddClient.QuickQuery([Name, Passw, aDevice, aIP], nil, false);
+    if Length(Result) > 0 then
+    begin
+      jsonObj := TJSONObject.Create([cSHASH,  Result,
+                                     cRESULT, cOK]);
+      try
+        Result := jsonObj.AsJSON;
+      finally
+        jsonObj.Free;
+      end;
+    end else Result := BAD_JSON_NO_SUCH_USER;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function GetConfig(const sIP, sHash : String) : String;
+var
+  jArr : TJSONArray;
+  jRes, jObj : TJSONObject;
+  cid  : TDeviceId;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then begin
+      jArr := TJSONArray.Create;
+      jRes := TJSONObject.Create([cCONFIG, jArr,
+                                  cRESULT, cOK]);
+      vUsersDB.PREP_GetConf.Lock;
+      try
+        with vUsersDB.PREP_GetConf do
+        if OpenDirect([cid.id]) then
+        begin
+          repeat
+            jObj := TJSONObject.Create([cKIND,    AsInt32[0],
+                                        cDESCR,   AsString[1],
+                                        cMIVALUE, AsDouble[2],
+                                        cMAVALUE, AsDouble[3],
+                                        cDEFVALUE,AsDouble[4],
+                                        cFVALUE,  AsDouble[5]]);
+            jArr.Add(jObj);
+          until not Step;
+        end;
+        vUsersDB.PREP_GetConf.Close;
+        Result := jRes.AsJSON;
+      finally
+        vUsersDB.PREP_GetConf.UnLock;
+        jRes.Free;
+      end;
+    end
+    else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function SetConfig(const sIP, sHash, sConfig : String) : String;
+var
+  jArr : TJSONArray;
+  jObj : TJSONObject;
+  jD, jI : TJSONData;
+  cid : TDeviceId;
+  values_list : String;
+  i, k : integer;
+  fv : Double;
+  fs : TFormatSettings;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then begin
+      jD := GetJSON(sConfig);
+      if Assigned(jD) then
+      begin
+        try
+          if jD is TJSONArray then
+          begin
+            jArr := TJSONArray(jD);
+            if jArr.Count > 0 then
+            begin
+              values_list := '';
+              fs := DefaultFormatSettings;
+              fs.DecimalSeparator := '.';
+              for i := 0 to jArr.Count-1 do
+              begin
+                if jArr[i] is TJSONObject then
+                begin
+                  jObj := TJSONObject(jArr[i]);
+                  jI := jObj.Find(cKIND);
+                  if assigned(jI) and (jI is TJSONIntegerNumber) then k := jI.AsInteger else k := 0;
+                  jI := jObj.Find(cFVALUE);
+                  if assigned(jI) and (jI is TJSONNumber) then fv := jI.AsFloat else fv := 0.0;
+
+                  if (k < 1) and (k > MAX_ALLOWED_CONFIG_KIND) then
+                  begin
+                    values_list := '';
+                    break;
+                  end;
+
+                  if length(values_list) > 0 then values_list := values_list + ',';
+                  values_list := values_list + Format('(%d, %d, %g)', [cid.id, k, fv], fs);
+                end;
+              end;
+              if Length(values_list) > 0 then
+              begin
+                vUsersDB.Execute('insert or replace into '+
+                                 'confs (cid, kind, fv) values '+
+                                  values_list + ';');
+                Result := OK_JSON;
+              end else
+                Result := BAD_JSON_MALFORMED_REQUEST;
+            end else
+              Result := BAD_JSON_MALFORMED_REQUEST;
+          end else
+            Result := BAD_JSON_MALFORMED_REQUEST;
+        finally
+          jD.Free;
+        end;
+      end else
+        Result := BAD_JSON_MALFORMED_REQUEST;
+    end
+    else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function GetListOfDevices(const sIP, sHash : String) : String;
+var
+  res : TJSONObject;
+  devs : TJSONArray;
+  cid : TDeviceId;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+    begin
+      devs := TJSONArray.Create;
+      res := TJSONObject.Create([cRESULT, cOK, cDEVICES, devs]);
+      try
+        vUsersDB.PREP_GetListOfDevices.Lock;
+        try
+          with vUsersDB.PREP_GetListOfDevices do
+          if OpenDirect([cid.id]) then
+          begin
+            repeat
+              devs.Add(TJSONString.Create(AsString[0]));
+            until not Step;
+          end else
+          begin
+            FreeAndNil(res);
+            Result := BAD_JSON_NO_DEVICES;
+          end;
+          vUsersDB.PREP_GetListOfDevices.Close;
+        finally
+          vUsersDB.PREP_GetListOfDevices.UnLock;
+        end;
+        if Assigned(res) then
+          Result := res.AsJSON;
+      finally
+        if assigned(res) then res.Free;
+      end;
+    end else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function GetRecordMeta(const sIP, sHash : String; recId : Integer) : String;
+var
+  jsonObj : TJSONObject;
+  cid : TDeviceId;
+  Res : Array [0..2] of Variant;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+    begin
+      if vUsersDB.PREP_GetRecordMeta.ExecToValue([cid.id, recId],
+                                                 @Res) = erOkWithData then
+      begin
+        jsonObj := TJSONObject.Create([cDEVICE,VarToStr(Res[0]),
+                                       cREC,   VarToStr(Res[1]),
+                                       cSTAMP, VarToStr(Res[2]),
+                                       cRESULT, cOK]);
+        try
+          Result := jsonObj.AsJSON;
+        finally
+          jsonObj.Free;
+        end;
+      end else
+        Result := BAD_JSON_NO_SUCH_RECORD;
+    end else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+procedure GetRecordData(Resp : TWCResponse;
+                             const sIP, sHash : String; recId : Integer);
+var
+  ptr : TSqliteBlobPointer;
+  cid : TDeviceId;
+  Strm : TMemoryStream;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+    begin
+      vUsersDB.PREP_GetRecordData.Lock;
+      try
+        with vUsersDB.PREP_GetRecordData do
+        if OpenDirect([cid.id, recId]) then
+        begin
+          ptr := AsBlob[0];
+          if Assigned(ptr.Data) then
+          begin
+            Strm := TMemoryStream.Create;
+            Strm.WriteBuffer(ptr.Data^, ptr.SizeOfData);
+            Strm.Position := 0; // important!
+            Resp.ContentStream := Strm;
+            Resp.FreeContentStream := true;
+          end else
+            Resp.Content := BAD_JSON_NO_DATA_RETURNED;
+        end else
+          Resp.Content := BAD_JSON_NO_SUCH_RECORD;
+        vUsersDB.PREP_GetRecordData.Close;
+      finally
+        vUsersDB.PREP_GetRecordData.UnLock;
+      end;
+    end else
+      Resp.Content := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Resp.Content := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Resp.Content := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Resp.Content := BAD_JSON_JSON_FAIL;
+    else Resp.Content := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function GetRecordCount(const sIP, sHash, FromLastStamp : String) : String;
+var
+  jsonArr : TJSONArray;
+  jsonObj, jsonRes : TJSONObject;
+  cid : TDeviceId;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+    begin
+      jsonArr := TJSONArray.Create;
+      jsonRes := TJSONObject.Create([cRECORDS, jsonArr]);
+      try
+        vUsersDB.PREP_GetRecordCount.Lock;
+        try
+          with vUsersDB.PREP_GetRecordCount do
+          if OpenDirect([cid.id, FromLastStamp]) then
+          begin
+            repeat
+              jsonObj := TJSONObject.Create([cRID,    AsInt32[0],
+                                             cDEVICE, AsString[1],
+                                             cSTAMP,  AsString[2]]);
+              jsonArr.Add(jsonObj);
+            until not Step;
+          end;
+          vUsersDB.PREP_GetRecordCount.Close;
+        finally
+          vUsersDB.PREP_GetRecordCount.UnLock;
+        end;
+        jsonRes.Add(cRESULT, cOK);
+        Result := jsonRes.AsJSON;
+      finally
+        jsonRes.Free;
+      end;
+    end else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function DeleteRecords(const sIP, sHash, sRecords : String) : String;
+var
+  jD   : TJSONData;
+  jArr : TJSONArray;
+  cid : TDeviceId;
+  i, k, v : integer;
+  hasneg : Boolean;
+  values_list : String;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+    begin
+      jD := GetJSON(sRecords);
+      if Assigned(jD) then
+      begin
+        try
+          if jD is TJSONArray then
+          begin
+            jArr := TJSONArray(jD);
+            if jArr.Count = 0 then
+              Result := BAD_JSON_MALFORMED_REQUEST else
+            if jArr.Count = 1 then
+            begin
+              if (jArr[0] is TJSONIntegerNumber) and
+                 (jArr[0].AsInteger >= 0) then
+              begin
+                vUsersDB.PREP_DeleteRecord.Execute([cid.id, jArr[0].AsInteger]);
+                Result := OK_JSON;
+              end else
+                Result := BAD_JSON_MALFORMED_REQUEST;
+            end else
+            begin
+              values_list := '';
+              hasneg := false;
+              k := High(integer);
+              for i := 0 to jArr.Count-1 do
+              begin
+                if jArr[i] is TJSONIntegerNumber then
+                begin
+                  v := jArr[i].AsInteger;
+                  if v < 0 then hasneg := true else
+                  begin
+                    if length(values_list) > 0 then values_list := values_list + ',';
+                    values_list := values_list + Inttostr(v);
+                    if k > v then
+                      k := v;
+                  end;
+                end;
+              end;
+              if k < High(Integer) then
+              begin
+                if hasneg then
+                begin
+                  vUsersDB.PREP_DeleteRecordsFrom.Execute([cid.id, k]);
+                end;
+                vUsersDB.Execute('delete from sessions where '+
+                                 '(cid == ' +inttostr(cid.id) +
+                                 ') and (id in (' + values_list + '));');
+                Result := OK_JSON;
+              end else
+                Result := BAD_JSON_MALFORMED_REQUEST;
+            end;
+          end else
+          if jD is TJSONIntegerNumber then
+          begin
+            vUsersDB.PREP_DeleteRecord.Execute([cid.id, jD.AsInteger]);
+            Result := OK_JSON;
+          end else
+            Result := BAD_JSON_MALFORMED_REQUEST;
+        finally
+          jD.Free;
+        end;
+      end else
+        Result := BAD_JSON_MALFORMED_REQUEST;
+    end else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function GetMsgs(const sIP, sHash : String; FromLastStamp : String) : String;
+var
+  jsonArr : TJSONArray;
+  jsonObj, jsonRes : TJSONObject;
+  ParamsData : TJSONData;
+  jsonStr : TJSONString;
+  cid : TDeviceId;
+  Str : String;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+    begin
+      jsonObj := nil;
+      try
+        jsonObj := TJSONObject(GetJSON(FromLastStamp));
+      except
+        if assigned(jsonObj) then FreeAndNil(jsonObj);
+      end;
+
+      if Assigned(jsonObj) then
+      begin
+        if jsonObj.Find(cMSG, jsonStr) and
+           SameText(jsonStr.AsString, cSYNC) then
+        begin
+          // client trying to get msgs from the last sync
+          FromLastStamp := vUsersDB.PREP_GetLastSync.QuickQuery([cid.id,
+                                                                 cid.device],
+                                                                 nil, false);
+        end else
+          FromLastStamp := '';
+        FreeAndNil(jsonObj);
+      end;
+      jsonArr := TJSONArray.Create;
+      jsonRes := TJSONObject.Create([cMSGS, jsonArr,
+                                     cRESULT, cOK]);
+      try
+        vUsersDB.PREP_GetMsgs.Lock;
+        try
+          with vUsersDB.PREP_GetMsgs do
+          if OpenDirect([cid.id, FromLastStamp, cid.device]) then
+          begin
+            //request format:
+             //msg, device, params, stamp
+            repeat
+              Str := AsString[2];
+              if Length(Str) > 0 then
+                ParamsData := GetJSON(Str) else
+                ParamsData := TJSONObject.Create;
+
+              jsonObj := TJSONObject.Create([cMSG,    AsString[0],
+                                             cDEVICE, AsString[1],
+                                             cPARAMS, ParamsData,
+                                             cSTAMP,  AsString[3]]);
+              jsonArr.Add(jsonObj);
+            until not Step;
+          end;
+          vUsersDB.PREP_GetMsgs.Close;
+        finally
+          vUsersDB.PREP_GetMsgs.UnLock;
+        end;
+        Result := jsonRes.AsJSON;
+      finally
+        jsonRes.Free;
+      end;
+    end else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function AddRecord(const sHash, sMeta : String;  Req : TWCRequest) : String;
+var
+  cid : TDeviceId;
+  ptr : TSqliteBlobPointer;
+begin
+  try
+    cid := GetClientId(Req.RemoteAddress, sHash);
+    if cid.id >= 0 then
+    begin
+      if assigned(Req.ContentStream) then
+      begin
+        if Req.ContentStream is TCustomMemoryStream then
+        begin
+          ptr.Data := TCustomMemoryStream(Req.ContentStream).Memory;
+          ptr.SizeOfData := TCustomMemoryStream(Req.ContentStream).Size;
+          ptr.destr := nil; //static
+          vUsersDB.PREP_AddRecord.Execute([cid.id, cid.device, sMeta, @ptr]);
+          Result := OK_JSON;
+        end else
+          Result := BAD_JSON_INTERNAL_UNK;
+      end else
+        Result := BAD_JSON_EMPTY_REQUEST;
+    end else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function AddMsg(const sIP, sHash, sMsg, aTarget, aParams : String) : String;
+var
+  cid : TDeviceId;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+    begin
+      vUsersDB.PREP_AddMsg.Execute([cid.id, sMsg, cid.device, aTarget, aParams]);
+      Result := OK_JSON;
+    end else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function AddMsgs(const sIP, sHash : String; arr : TJSONArray) : String;
+var
+  cid : TDeviceId;
+  i : integer;
+  sMsg, aTarget, aParams : String;
+  jField : TJSONData;
+begin
+  try
+    cid := GetClientId(sIP, sHash);
+    if cid.id >= 0 then
+    begin
+      for i := 0 to arr.Count-1 do
+      begin
+        if arr[i] is TJSONObject then
+        begin
+          if TJSONObject(arr[i]).Find(cTARGET, jField) then
+            aTarget := jField.AsString else
+            aTarget := '';
+          if TJSONObject(arr[i]).Find(cMSG, jField) then
+            sMsg := jField.AsString else
+            sMsg := '';
+          if TJSONObject(arr[i]).Find(cPARAMS, jField) then
+          begin
+            aParams := jField.AsJSON;
+          end else
+            aParams := '{}';
+          vUsersDB.PREP_AddMsg.Execute([cid.id, sMsg, cid.device, aTarget, aParams]);
+        end;
+      end;
+      Result := OK_JSON;
+    end else
+      Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    on e : EJSONParser do Result := BAD_JSON_JSON_PARSER_FAIL;
+    on e : EJSON do Result := BAD_JSON_JSON_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+{ TSessionHashFunc }
+
+constructor TSessionHashFunc.Create;
+begin
+  inherited Create('gennewhash', 0, sqlteUtf8, sqlfScalar, true);
+end;
+
+procedure TSessionHashFunc.ScalarFunc(argc : integer);
+var S : String;
+begin
+  S := GenSessionHash(IntToHex(Random(High(Int16))+1, 4) +
+                      IntToHex(GetTickCount64, 16));
+  SetResult(S);
+end;
+
+{ TRESTWebCamUsersDB }
+
+constructor TRESTWebCamUsersDB.Create;
+begin
+  FUsersDB := TExtSqlite3Dataset.Create(nil);
+end;
+
+procedure TRESTWebCamUsersDB.DoHelp({%H-}aData : TObject);
+begin
+  try
+    FUsersDB.FileName := Application.SitePath + TRESTJsonConfigHelper.Config.UsersDB;
+    FUsersDB.AddFunction(TSessionHashFunc.Create);
+    FUsersDB.ExecSQL(
+    'create table if not exists clients'+
+      '(id integer primary key autoincrement, '+
+       'name text unique,'+
+       'pass text not null);');
+    FUsersDB.ExecSQL(
+    'create table if not exists sessions'+
+      '(id integer primary key autoincrement, '+
+       'cid integer references clients(id) on delete cascade not null,'+
+       'device text,'+
+       'ip text,'+
+       'shash text default (gennewhash()),'+
+       'req_total integer default 0,'+
+       'req_permin integer default 0,'+
+       'stamp double default (julianday(current_timestamp)));');
+    FUsersDB.ExecSQL(
+    'create table if not exists records'+
+      '(id integer primary key autoincrement, '+
+       'cid integer references clients(id) on delete cascade,'+
+       'device text,'+
+       'metadata text,'+
+       'data blob,'+
+       'stamp text default current_timestamp);');
+    FUsersDB.ExecSQL(
+    'create table if not exists msgs'+
+      '(id integer primary key autoincrement, '+
+       'cid integer references clients(id) on delete cascade,'+
+       'msg text,'+
+       'device text,'+
+       'target text,'+
+       'params text,'+
+       'stamp text default current_timestamp);');
+    FUsersDB.ExecSQL(
+    'create table if not exists confs'+
+      '(cid integer references clients(id) on delete cascade,'+
+       'kind integer,'+
+       'fv real default 0.0,'+
+       'unique (cid, kind) on conflict replace);');
+    FUsersDB.ExecSQL(
+    'create table if not exists conf_set'+
+      '(knd integer unique,'+
+       'descr text,'+
+       'miv real default 0.0,'+
+       'mav real default 0.0,'+
+       'dv real default 0.0);');
+
+    MAX_ALLOWED_CONFIG_KIND := 4;
+    FUsersDB.ExecuteDirect('insert or ignore into conf_set (knd, descr, miv, mav, dv) values '+
+                           '(1, ''old records timeout (days)'', 0.004, 168.0, 30.0), '+
+                           '(2, ''dead sessions timeout (minutes)'', 3, 30, 10), '+
+                           '(3, ''max requests for session'', 200, 1500, 10000), '+
+                           '(4, ''max reqs per min for session'', 20, 200, 50);');
+
+    PREP_GetClient := FUsersDB.AddNewPrep(
+                          'SELECT id FROM clients WHERE name == ?1 and pass == ?2;');
+    PREP_GetListOfDevices := FUsersDB.AddNewPrep(
+                          'SELECT device FROM sessions WHERE cid == ?1 group by device;');
+
+    if (sqluGetVersionMagNum >= 3) and (sqluGetVersionMinNum >= 35) then
+    begin
+      PREP_AddClient := FUsersDB.AddNewPrep(
+                          'INSERT OR IGNORE INTO sessions (cid, device, ip) '+
+                          'SELECT id, ?3, ?4 FROM clients WHERE '+
+                          'clients.name == ?1 and clients.pass == ?2 '+
+                          'RETURNING shash;');
+      PREP_ReturnLastHsh := nil;
+    end else begin
+      PREP_AddClient := FUsersDB.AddNewPrep(
+                          'INSERT INTO sessions (cid, device, ip) '+
+                          'values (?1, ?2, ?3);');
+      PREP_ReturnLastHsh := FUsersDB.AddNewPrep(
+                          'SELECT shash from sessions where cid == ?1 and '+
+                          'device == ?2 order by stamp desc limit 1;');
+    end;
+    PREP_AddMsg := FUsersDB.AddNewPrep('INSERT INTO msgs '+
+                                       '(cid, msg, device, target, params) '+
+                                       'values (?1, ?2, ?3, ?4, ?5);');
+    PREP_GetLastSync := FUsersDB.AddNewPrep('select stamp from msgs '+
+                                            'where (cid == ?1) and '+
+                                            '(device == ?2) and '+
+                                            '(msg == ''sync'') '+
+                                            'order by stamp desc limit 1;');
+    PREP_GetClientByHash := FUsersDB.AddNewPrep('select cid, device, ip '+
+                                            'from sessions where shash == ?1 '+
+                                            'limit 1;');
+    PREP_AddRecord := FUsersDB.AddNewPrep('INSERT INTO records '+
+                                          '(cid, device, metadata, data) '+
+                                          'values (?1, ?2, ?3, ?4);');
+
+    // important to send both params:
+    //   ?1 - client id, ?2 - record/msg id
+    // to prevent accessing to frames of other users
+    PREP_DeleteRecordsFrom := FUsersDB.AddNewPrep('DELETE FROM records '+
+                                          'where (cid == ?1) and (id <= ?2);');
+    PREP_DeleteRecord := FUsersDB.AddNewPrep('DELETE FROM records '+
+                                          'where (cid == ?1) and (id == ?2);');
+    PREP_GetRecordMeta := FUsersDB.AddNewPrep('SELECT device, metadata, stamp FROM '+
+                                              'records where cid == ?1 and id = ?2 limit 1;');
+    PREP_GetRecordData := FUsersDB.AddNewPrep('SELECT data FROM '+
+                                              'records where cid == ?1 and id = ?2 limit 1;');
+    //
+    PREP_GetRecordCount := FUsersDB.AddNewPrep('SELECT id, device, stamp FROM '+
+                                               'records where (cid == ?1) and (stamp > ?2) '+
+                                               'order by stamp asc limit 32;');
+    PREP_GetMsgs        := FUsersDB.AddNewPrep('SELECT msg, device, params, stamp FROM '+
+                                               'msgs where (cid == ?1) and (stamp > ?2) and '+
+                                               '(target in (?3, '''' )) '+
+                                               'order by stamp asc limit 32;');
+    //
+
+    {PREP_ConfSetFloat := FUsersDB.AddNewPrep('WITH new (cid, kind, fv, sv) AS ( VALUES(?1, ?2, ?3) ) '+
+                        'INSERT OR REPLACE INTO confs (cid, kind, fv, sv) '+
+                        'SELECT old.cid, old.kind, new.fv, old.sv '+
+                        'FROM new LEFT JOIN confs AS old ON '+
+                        'new.cid = old.cid and new.kind = old.kind;');
+    PREP_ConfSetText := FUsersDB.AddNewPrep('WITH new (cid, kind, sv) AS ( VALUES(?1, ?2, ?3) ) '+
+                        'INSERT OR REPLACE INTO confs (cid, kind, fv, sv) '+
+                        'SELECT old.cid, old.kind, old.fv, new.sv '+
+                        'FROM new LEFT JOIN confs AS old ON '+
+                        'new.cid = old.cid and new.kind = old.kind;');}
+
+    PREP_GetConf := FUsersDB.AddNewPrep('Select conf_set.knd, '+
+                                               'conf_set.descr, '+
+                                               'conf_set.miv, '+
+                                               'conf_set.mav, '+
+                                               'conf_set.dv, '+
+                                               'ifnull(fv, conf_set.dv) as flv '+
+                                        'from conf_set left join confs on '+
+                                        'conf_set.knd == confs.kind '+
+                                        'and cid == ?1 '+
+                                        'order by conf_set.knd asc;');
+
+    // cleanup 'old' records (conf.kind = 1) - launching every hour
+    // the 'old' record = (cur_timestamp-record.timestamp) values greater than conf[1].fv
+    //   conf[1].fv(min,max,default) = 1 hr, 1 month, 1 week
+   //     (inital values - you can edit them in conf_set table)
+    PREP_MaintainStep1 := FUsersDB.AddNewPrep('delete from records where id in '+
+                                              '(select id from records as r1 left join confs '+
+                                              'on confs.cid == r1.cid and confs.kind == 1 '+
+                                              'inner join conf_set on conf_set.knd == 1 '+
+                                              'where (julianday(current_timestamp) - julianday(r1.stamp)) > '+
+                                                    'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
+
+    // cleanup 'dead' sessions (conf.kind = 2) - launching every 10s
+    // the 'dead' session = (cur_timestamp-session.timestamp) values greater than conf[2].fv
+    //   conf[2].fv(min,max,default) = 3 min, 30 min, 10 min
+    //     (inital values - you can edit them in conf_set table)
+    PREP_MaintainStep2 := FUsersDB.AddNewPrep('delete from sessions where id in '+
+                                              '(select id from sessions as s1 left join confs '+
+                                              'on confs.cid == s1.cid and confs.kind == 2 '+
+                                              'inner join conf_set on conf_set.knd == 2 '+
+                                              'where (julianday(current_timestamp) - s1.stamp) > '+
+                                                    '(min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav)*0.0007));');
+
+    // cleanup 'old' sessions (conf.kind = 3) - launching every 60s
+    // the 'old' sessions = num of requests exceed conf[3].fv value
+    //   conf[3].fv(min,max,default) = 200, 10000, 1500
+    //     (inital values - you can edit them in conf_set table)
+    PREP_MaintainStep3 := FUsersDB.AddNewPrep('delete from sessions where id in '+
+                                              '(select id from sessions as s1 left join confs '+
+                                              'on confs.cid == s1.cid and confs.kind == 3 '+
+                                              'inner join conf_set on conf_set.knd == 3 '+
+                                              'where s1.req_total > '+
+                                                    'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
+
+    // cleanup 'fever' sessions (conf.kind = 4) - launching every 60s
+    // the 'fever' sessions = num of requests per minute exceed conf[4].fv value
+    //   conf[4].fv(min,max,default) = 20, 200, 50
+    //     (inital values - you can edit them in conf_set table)
+    PREP_MaintainStep4 := FUsersDB.AddNewPrep('delete from sessions where id in '+
+                                              '(select id from sessions as s1 left join confs '+
+                                              'on confs.cid == s1.cid and confs.kind == 4 '+
+                                              'inner join conf_set on conf_set.knd == 4 '+
+                                              'where s1.req_permin > '+
+                                                    'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
+    PREP_MaintainStepSelect4 := FUsersDB.AddNewPrep('select ip from sessions as s1 left join confs '+
+                                                    'on confs.cid == s1.cid and confs.kind == 4 '+
+                                                    'inner join conf_set on conf_set.knd == 4 '+
+                                                    'where s1.req_permin > '+
+                                                       'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav);');
+    PREP_MaintainStepUpdate4 := FUsersDB.AddNewPrep('update sessions set req_permin = 0;');
+
+    // delete read messages every 10 sec
+    PREP_MaintainStep5 := FUsersDB.AddNewPrep('with syncs (stmp, cid, dev) as '+
+                                              '(select max(julianday(stamp)), cid, device from '+
+                                              ' msgs where msg==''sync'' group by cid, device) '+
+                                              'delete from msgs where msgs.id in (select id from msgs '+
+                                              'inner join syncs on '+
+                                              '(msgs.cid = syncs.cid) and '+
+                                              '((msgs.target = syncs.dev) or '+
+                                              ' ((msgs.device = syncs.dev) and (msgs.msg==''sync''))) '+
+                                              'where (syncs.stmp - julianday(msgs.stamp)) > 0.003);');
+    // delete old broadcast messages every 60 sec
+    //  max lifetime of all broarcast msgs is only 1hr
+    PREP_MaintainStep6 := FUsersDB.AddNewPrep('delete from msgs where '+
+                                              '(target == '''') and (msg!=''sync'') and '+
+                                              '((julianday(current_timestamp) - julianday(stamp)) > 0.04);');
+    // delete old messages every 1 hr
+    //  max lifetime of all msgs is 30 days (except sync messages)
+    //  sync messages are live forever
+    PREP_MaintainStep7 := FUsersDB.AddNewPrep('delete from msgs where '+
+                                              '(msg!=''sync'') and '+
+                                              '((julianday(current_timestamp) - julianday(stamp)) > 30.0);');
+
+
+    PREP_UpdateSession := FUsersDB.AddNewPrep('update sessions '+
+                                                      'set stamp = julianday(current_timestamp), '+
+                                                          'req_permin = req_permin + 1, '+
+                                                          'req_total = req_total + 1 '+
+                                                      'where shash == ?1');
+  except
+    on E : Exception do
+    begin
+      Application.DoError(E.ToString);
+      Application.NeedShutdown := true;
+    end;
+  end;
+end;
+
+destructor TRESTWebCamUsersDB.Destroy;
+begin
+  FUsersDB.Free;
+  inherited Destroy;
+end;
+
+procedure TRESTWebCamUsersDB.Execute(const Str : String);
+begin
+  FUsersDB.ExecuteDirect(Str);
+end;
+
+procedure TRESTWebCamUsersDB.MaintainStep10s;
+begin
+  PREP_MaintainStep2.Execute;
+  PREP_MaintainStep5.Execute;
+end;
+
+procedure TRESTWebCamUsersDB.MaintainStep60s;
+var ip : string;
+begin
+  PREP_MaintainStep3.Execute;
+
+
+  PREP_MaintainStepSelect4.Lock;
+  try
+    //get list of fever sessions
+    with PREP_MaintainStepSelect4 do
+    if OpenDirect([]) then
+    begin
+      ip := AsString[0];
+      Application.CoolDownIP(ip, 5); //cooldown for 5 minutes
+    end;
+    PREP_MaintainStepSelect4.Close;
+  finally
+    PREP_MaintainStepSelect4.UnLock;
+  end;
+
+  PREP_MaintainStep4.Execute;
+  PREP_MaintainStepUpdate4.Execute;
+
+  PREP_MaintainStep6.Execute;
+end;
+
+procedure TRESTWebCamUsersDB.MaintainStep1hr;
+begin
+  PREP_MaintainStep1.Execute;
+  PREP_MaintainStep7.Execute;
+end;
+
+class function TRESTWebCamUsersDB.UsersDB : TRESTWebCamUsersDB;
+begin
+  if not assigned(vUsersDB) then
+    vUsersDB := TRESTWebCamUsersDB.Create;
+  Result := vUsersDB;
+end;
+
+{ TWCHeartBit }
+
+procedure TWCHeartBit.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH],
+                             Request.Content, Params, ['']) then
+    Response.Content := HeartBit(Request.RemoteAddress, Params[0]) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCGetMsgs }
+
+procedure TWCGetMsgs.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cSTAMP],
+                             Request.Content, Params, ['', '']) then
+    Response.Content := GetMsgs(Request.RemoteAddress, Params[0], Params[1]) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+
+{ TWCGetListOfDevices }
+
+procedure TWCGetListOfDevices.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH],
+                             Request.Content, Params, ['']) then
+    Response.Content := GetListOfDevices(Request.RemoteAddress, Params[0]) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCGetRecordMeta }
+
+procedure TWCGetRecordMeta.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cRID],
+                             Request.Content, Params, ['', 0]) then
+    Response.Content := GetRecordMeta(Request.RemoteAddress, Params[0], Params[1]) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCGetRecordData }
+
+procedure TWCGetRecordData.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cRID],
+                             Request.Content, Params, ['', 0]) then
+    GetRecordData(Response, Request.RemoteAddress, Params[0], Params[1])
+  else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCGetRecordCount }
+
+procedure TWCGetRecordCount.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cSTAMP],
+                             Request.Content, Params, ['', '']) then
+    Response.Content := GetRecordCount(Request.RemoteAddress, Params[0], Params[1]) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCDeleteRecords }
+
+procedure TWCDeleteRecords.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cRECORDS],
+                             Request.Content, Params, ['', '[]']) then
+    Response.Content := DeleteRecords(Request.RemoteAddress,
+                                      Params[0], Params[1]) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCAddMsg }
+
+procedure TWCAddMsg.Execute;
+var
+  d   : TJSONData;
+  arr : TJSONArray;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cMSG, cTARGET, cPARAMS, cMSGS],
+                                   Request.Content, Params, ['', '', '', '{}', '']) then
+  begin
+    try
+      if Length(Params[0]) > 0 then
+      begin
+        d := nil; arr := nil;
+        if (Length(Params[4]) > 0) then
+        begin
+          try
+            d := GetJSON(Params[4]);
+            if d is TJSONArray then arr := TJSONArray(d);
+          except
+            on e : EJSONParser do if assigned(d) then FreeAndNil(d);
+            on e : EJSON do       if assigned(d) then FreeAndNil(d);
+          end;
+        end;
+        try
+          if Assigned(arr) then
+            Response.Content := AddMsgs(Request.RemoteAddress, Params[0], arr)
+          else
+            Response.Content := AddMsg(Request.RemoteAddress, Params[0],
+                                                              Params[1],
+                                                              Params[2],
+                                                              Params[3]);
+        finally
+          if assigned(d) then FreeAndNil(d);
+        end;
+      end else
+        Response.Content := BAD_JSON_MALFORMED_REQUEST;
+    except
+      Response.Content := BAD_JSON_INTERNAL_UNK;
+    end;
+  end else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCAddRecord }
+
+procedure TWCAddRecord.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cMETA],
+                             Params, ['', '']) then
+    Response.Content := AddRecord(Params[0], Params[1], Request)
+  else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCAddClient }
+
+procedure TWCAddClient.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cNAME, cPASS, cDEVICE],
+                             Request.Content, Params, ['', '', '']) then
+  begin
+    if (Length(Params[0]) > 0) and
+       (Length(Params[1]) > 0) and
+       (Length(Params[2]) > 0) then
+      Response.Content := AddClient(Params[0], Params[1], Params[2],
+                                               Request.RemoteAddress) else
+      Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  end else Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCSetConfig }
+
+procedure TWCSetConfig.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cCONFIG],
+                             Request.Content, Params, ['','']) then
+  begin
+    if Length(Params[1]) > 0 then
+      Response.Content := SetConfig(Request.RemoteAddress, Params[0], Params[1]) else
+      Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  end else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCGetConfig }
+
+procedure TWCGetConfig.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH],
+                             Request.Content, Params, ['']) then
+    Response.Content := GetConfig(Request.RemoteAddress, Params[0]) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+initialization
+  TJSONData.CompressedJSON := true;
+
+end.
+
