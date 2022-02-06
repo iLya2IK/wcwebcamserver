@@ -941,7 +941,7 @@ begin
     FUsersDB.ExecuteDirect('insert or ignore into conf_set (knd, descr, miv, mav, dv) values '+
                            '(1, ''old records timeout (days)'', 0.004, 168.0, 30.0), '+
                            '(2, ''dead sessions timeout (minutes)'', 3, 30, 10), '+
-                           '(3, ''max requests for session'', 200, 1500, 10000), '+
+                           '(3, ''max requests for session'', 200, 10000, 1500), '+
                            '(4, ''max reqs per min for session'', 20, 200, 50);');
 
     PREP_GetClient := FUsersDB.AddNewPrep(
@@ -997,7 +997,7 @@ begin
                                                'order by stamp asc limit 32;');
     PREP_GetMsgs        := FUsersDB.AddNewPrep('SELECT msg, device, params, stamp FROM '+
                                                'msgs where (cid == ?1) and (stamp > ?2) and '+
-                                               '(target in (?3, '''' )) '+
+                                               '(target in (?3, '''' )) and (msg!=''sync'')'+
                                                'order by stamp asc limit 32;');
     //
 
