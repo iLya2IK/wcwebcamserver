@@ -992,13 +992,13 @@ begin
     PREP_GetRecordData := FUsersDB.AddNewPrep('SELECT data FROM '+
                                               'records where cid == ?1 and id = ?2 limit 1;');
     //
-    PREP_GetRecordCount := FUsersDB.AddNewPrep('SELECT id, device, stamp FROM '+
+    PREP_GetRecordCount := FUsersDB.AddNewPrep('Select * from (SELECT id, device, stamp FROM '+
                                                'records where (cid == ?1) and (stamp > ?2) '+
-                                               'order by stamp asc limit 32;');
-    PREP_GetMsgs        := FUsersDB.AddNewPrep('SELECT msg, device, params, stamp FROM '+
+                                               'order by stamp desc limit 32) order by stamp asc;');
+    PREP_GetMsgs        := FUsersDB.AddNewPrep('Select * from (SELECT msg, device, params, stamp FROM '+
                                                'msgs where (cid == ?1) and (stamp > ?2) and '+
                                                '(target in (?3, '''' )) and (msg!=''sync'')'+
-                                               'order by stamp asc limit 32;');
+                                               'order by stamp desc limit 32) order by stamp asc;');
     //
 
     {PREP_ConfSetFloat := FUsersDB.AddNewPrep('WITH new (cid, kind, fv, sv) AS ( VALUES(?1, ?2, ?3) ) '+
