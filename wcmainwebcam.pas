@@ -69,8 +69,12 @@ begin
       Result := nil;
     end;
   end else begin
-    Application.SendError(Connection.Response, 405);
-    Result := nil;
+    if SameText('/test.json', Request.PathInfo) then
+      Result := TWCTest.Create(Connection) else
+    begin
+      Application.SendError(Connection.Response, 405);
+      Result := nil;
+    end;
   end;
 end;
 

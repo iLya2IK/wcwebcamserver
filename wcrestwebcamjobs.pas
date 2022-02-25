@@ -103,6 +103,13 @@ type
     procedure Execute; override;
   end;
 
+  { TWCTest }
+
+  TWCTest = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
   { TRESTWebCamUsersDB }
 
   TRESTWebCamUsersDB = class(TWCHTTPAppInitHelper)
@@ -1343,6 +1350,19 @@ begin
                              Request.Content, Params, ['']) then
     Response.Content := GetConfig(Request.RemoteAddress, Params[0]) else
     Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+
+{ TWCTest }
+
+procedure TWCTest.Execute;
+var
+  b : RawByteString;
+begin
+  SetLength(b, 987);
+  FillChar(b[1], 987, $ff);
+  Response.Content := b;
   inherited Execute;
 end;
 
