@@ -43,6 +43,7 @@ begin
   WCJobsTree.Values['/getRecordCount.json']   := TWCGetRecordCount;
   WCJobsTree.Values['/deleteRecords.json']    := TWCDeleteRecords;
   WCJobsTree.Values['/getMsgs.json']          := TWCGetMsgs;
+  WCJobsTree.Values['/getMsgsAndSync.json']   := TWCGetMsgsAndSync;
   WCJobsTree.Values['/getDevicesOnline.json'] := TWCGetListOfDevices;
   WCJobsTree.Values['/getConfig.json']        := TWCGetConfig;
   WCJobsTree.Values['/setConfig.json']        := TWCSetConfig;

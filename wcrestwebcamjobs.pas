@@ -68,6 +68,13 @@ type
     procedure Execute; override;
   end;
 
+  { TWCGetMsgsAndSync}
+
+  TWCGetMsgsAndSync = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
   { TWCGetListOfDevices}
 
   TWCGetListOfDevices = class(TWCMainClientJob)
@@ -122,6 +129,7 @@ type
     PREP_AddRecord,
 
     PREP_AddMsg,
+    PREP_AddSync,
 
     PREP_GetLastSync,
 
@@ -193,6 +201,7 @@ const ERR_UNSPECIFIED       = 1;
 
 const BAD_JSON = '{"result":"BAD","code":1}';
       OK_JSON  = '{"result":"OK"}';
+      JSON_EMPTY_OBJ = '{}';
       BAD_JSON_INTERNAL_UNK      = '{"result":"BAD","code":2}';
       BAD_JSON_DATABASE_FAIL     = '{"result":"BAD","code":3}';
       BAD_JSON_JSON_PARSER_FAIL  = '{"result":"BAD","code":4}';
@@ -298,7 +307,7 @@ begin
   end;
 end;
 
-function AddClient(const Name, Passw, aDevice, aIP : String) : String;
+function AddClient(const Name, Passw, aDevice, aMeta, aIP : String) : String;
 var
   jsonObj : TJSONObject;
   cid : integer;
@@ -313,7 +322,7 @@ begin
                                                @cid,
                                                sizeof(cid)) = erOkWithData then
         begin
-          vUsersDB.PREP_AddClient.Execute([cid, aDevice, aIP]);
+          vUsersDB.PREP_AddClient.Execute([cid, aDevice, aMeta, aIP]);
           Result := vUsersDB.PREP_ReturnLastHsh.QuickQuery([cid, aDevice], nil, false);
         end else
           Exit(BAD_JSON_NO_SUCH_USER);
@@ -321,7 +330,7 @@ begin
         vUsersDB.PREP_ReturnLastHsh.UnLock;
       end;
     end else
-      Result := vUsersDB.PREP_AddClient.QuickQuery([Name, Passw, aDevice, aIP], nil, false);
+      Result := vUsersDB.PREP_AddClient.QuickQuery([Name, Passw, aDevice, aMeta, aIP], nil, false);
     if Length(Result) > 0 then
     begin
       jsonObj := TJSONObject.Create([cSHASH,  Result,
@@ -473,7 +482,8 @@ begin
           if OpenDirect([cid.id]) then
           begin
             repeat
-              devs.Add(TJSONString.Create(AsString[0]));
+              devs.Add(TJSONObject.Create([cDEVICE, AsString[0],
+                                           cMETA,   AsString[1]]));
             until not Step;
           end else
           begin
@@ -704,7 +714,9 @@ begin
   end;
 end;
 
-function GetMsgs(const sIP, sHash : String; FromLastStamp : String) : String;
+function GetMsgs(const sIP, sHash : String;
+                             FromLastStamp : String;
+                             DoSync : Boolean) : String;
 var
   jsonArr : TJSONArray;
   jsonObj, jsonRes : TJSONObject;
@@ -737,6 +749,10 @@ begin
           FromLastStamp := '';
         FreeAndNil(jsonObj);
       end;
+
+      if DoSync then
+        vUsersDB.PREP_AddSync.Execute([cid.id, cid.device]);
+
       jsonArr := TJSONArray.Create;
       jsonRes := TJSONObject.Create([cMSGS, jsonArr,
                                      cRESULT, cOK]);
@@ -856,7 +872,7 @@ begin
           begin
             aParams := jField.AsJSON;
           end else
-            aParams := '{}';
+            aParams := JSON_EMPTY_OBJ;
           vUsersDB.PREP_AddMsg.Execute([cid.id, sMsg, cid.device, aTarget, aParams]);
         end;
       end;
@@ -908,6 +924,7 @@ begin
       '(id integer primary key autoincrement, '+
        'cid integer references clients(id) on delete cascade not null,'+
        'device text,'+
+       'metadata text,'+
        'ip text,'+
        'shash text default (gennewhash()),'+
        'req_total integer default 0,'+
@@ -954,20 +971,20 @@ begin
     PREP_GetClient := FUsersDB.AddNewPrep(
                           'SELECT id FROM clients WHERE name == ?1 and pass == ?2;');
     PREP_GetListOfDevices := FUsersDB.AddNewPrep(
-                          'SELECT device FROM sessions WHERE cid == ?1 group by device;');
+                          'SELECT device, metadata FROM sessions WHERE cid == ?1 group by device;');
 
     if (sqluGetVersionMagNum >= 3) and (sqluGetVersionMinNum >= 35) then
     begin
       PREP_AddClient := FUsersDB.AddNewPrep(
-                          'INSERT OR IGNORE INTO sessions (cid, device, ip) '+
-                          'SELECT id, ?3, ?4 FROM clients WHERE '+
+                          'INSERT OR IGNORE INTO sessions (cid, device, metadata, ip) '+
+                          'SELECT id, ?3, ?4, ?5 FROM clients WHERE '+
                           'clients.name == ?1 and clients.pass == ?2 '+
                           'RETURNING shash;');
       PREP_ReturnLastHsh := nil;
     end else begin
       PREP_AddClient := FUsersDB.AddNewPrep(
-                          'INSERT INTO sessions (cid, device, ip) '+
-                          'values (?1, ?2, ?3);');
+                          'INSERT INTO sessions (cid, device, metadata, ip) '+
+                          'values (?1, ?2, ?3, ?4);');
       PREP_ReturnLastHsh := FUsersDB.AddNewPrep(
                           'SELECT shash from sessions where cid == ?1 and '+
                           'device == ?2 order by stamp desc limit 1;');
@@ -975,6 +992,9 @@ begin
     PREP_AddMsg := FUsersDB.AddNewPrep('INSERT INTO msgs '+
                                        '(cid, msg, device, target, params) '+
                                        'values (?1, ?2, ?3, ?4, ?5);');
+    PREP_AddSync := FUsersDB.AddNewPrep('INSERT INTO msgs '+
+                                       '(cid, msg, device, target, params) '+
+                                       'values (?1, ''sync'', ?2, '''', '''');');
     PREP_GetLastSync := FUsersDB.AddNewPrep('select stamp from msgs '+
                                             'where (cid == ?1) and '+
                                             '(device == ?2) and '+
@@ -1190,11 +1210,21 @@ procedure TWCGetMsgs.Execute;
 begin
   if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cSTAMP],
                              Request.Content, Params, ['', '']) then
-    Response.Content := GetMsgs(Request.RemoteAddress, Params[0], Params[1]) else
+    Response.Content := GetMsgs(Request.RemoteAddress, Params[0], Params[1], false) else
     Response.Content := BAD_JSON_MALFORMED_REQUEST;
   inherited Execute;
 end;
 
+{ TWCGetMsgsAndSync }
+
+procedure TWCGetMsgsAndSync.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cSTAMP],
+                             Request.Content, Params, ['', '']) then
+    Response.Content := GetMsgs(Request.RemoteAddress, Params[0], Params[1], true) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
 
 { TWCGetListOfDevices }
 
@@ -1261,7 +1291,7 @@ var
   arr : TJSONArray;
 begin
   if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cMSG, cTARGET, cPARAMS, cMSGS],
-                                   Request.Content, Params, ['', '', '', '{}', '']) then
+                                   Request.Content, Params, ['', '', '', JSON_EMPTY_OBJ, '']) then
   begin
     try
       if Length(Params[0]) > 0 then
@@ -1314,13 +1344,13 @@ end;
 
 procedure TWCAddClient.Execute;
 begin
-  if DecodeParamsWithDefault(Request.QueryFields, [cNAME, cPASS, cDEVICE],
-                             Request.Content, Params, ['', '', '']) then
+  if DecodeParamsWithDefault(Request.QueryFields, [cNAME, cPASS, cDEVICE, cMETA],
+                             Request.Content, Params, ['', '', '', JSON_EMPTY_OBJ]) then
   begin
     if (Length(Params[0]) > 0) and
        (Length(Params[1]) > 0) and
        (Length(Params[2]) > 0) then
-      Response.Content := AddClient(Params[0], Params[1], Params[2],
+      Response.Content := AddClient(Params[0], Params[1], Params[2], Params[3],
                                                Request.RemoteAddress) else
       Response.Content := BAD_JSON_MALFORMED_REQUEST;
   end else Response.Content := BAD_JSON_MALFORMED_REQUEST;
