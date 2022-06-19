@@ -39,10 +39,12 @@ uses
   fphttp,
   http2consts,
   wcconfig,
+  wcNetworking,
   SortedThreadPool,
   {avaible decoders}
   wcdecoders,
-  wcdeflatedecoder;
+  wcdeflatedecoder,
+  WCRESTWebCamStreams;
 
 {$linklib libc}
 
@@ -53,10 +55,13 @@ vLibPath : String;
 begin
   Randomize;
 
+  Application.RegisterProtocolHelper(wcHTTP2, THTTP2WebCamServerHelper);
   Application.AddHelper(TRESTJsonConfigInitHelper.Create);
   Application.AddHelper(TRESTJsonConfigHelper.Config);
   Application.AddHelper(TRESTJsonIdleHelper.Create);
   Application.AddHelper(TRESTWebCamUsersDB.UsersDB);
+  Application.AddHelper(TRESTWebCamStreams.WebCamStreams);
+  Application.AddHelper(TRESTWebCamStreamsFinalize.Create);
 
   Application.ConfigFileName := ExtractFilePath(Application.ExeName) + 'server.cfg';
   if not assigned(Application.Config) then

@@ -13,11 +13,14 @@ uses
   Classes, SysUtils, variants,
   httpdefs, httpprotocol,
   jsonscanner, jsonparser, fpjson,
+  OGLFastNumList,
   ExtSqlite3DS,
   db,
-  wcApplication;
+  wcApplication, wcHTTP2Con, HTTP2Consts, wcNetworking;
 
 type
+
+  TDBID = Cardinal;
 
   { TWCAddClient }
 
@@ -117,6 +120,33 @@ type
     procedure Execute; override;
   end;
 
+  { TWCRawInputStream }
+
+  TWCRawInputStream = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCRawOutputStream }
+
+  TWCRawOutputStream = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
+  { TWCRawOutputSynchroJob }
+
+  TWCRawOutputSynchroJob = class(TWCMainClientJob)
+  private
+    FSID : TDBID;
+    FStage : integer;
+    FLastFrameId : QWord;
+  public
+    constructor Create(aConn : TWCAppConnection; sID : TDBID); overload;
+    procedure Execute; override;
+  end;
+
+
   { TRESTWebCamUsersDB }
 
   TRESTWebCamUsersDB = class(TWCHTTPAppInitHelper)
@@ -140,6 +170,8 @@ type
     PREP_DeleteRecordsFrom,
     PREP_GetMsgs,
     PREP_GetClientByHash,
+    PREP_GetSessionByDevice,
+    PREP_GetSessions,
 
     PREP_MaintainStep1,
     PREP_MaintainStep2,
@@ -166,6 +198,8 @@ type
     procedure MaintainStep60s;
     procedure MaintainStep1hr;
 
+    procedure CheckSSIDs(ids : TFastMapUInt);
+
     class function UsersDB : TRESTWebCamUsersDB;
   end;
 
@@ -178,15 +212,21 @@ type
   end;
 
   TDeviceId = record
-    id : integer;
+    cid, sid : TDBID;
     device : String;
   end;
 
+const
+     cRawInputStream = '/input.raw';
+     cRawOutputStream = '/output.raw';
+
 implementation
 
-uses wcutils, WCRESTWebCamAppHelper, sha1, base64, ExtSqliteUtils;
+uses wcutils, WCRESTWebCamAppHelper, sha1, base64, ExtSqliteUtils,
+  WCRESTWebCamStreams;
 
-const ERR_UNSPECIFIED       = 1;
+const ERR_NO_ERROR          = 0;
+      ERR_UNSPECIFIED       = 1;
       ERR_INTERNAL_UNK      = 2;
       ERR_DATABASE_FAIL     = 3;
       ERR_JSON_PARSER_FAIL  = 4;
@@ -198,6 +238,9 @@ const ERR_UNSPECIFIED       = 1;
       ERR_NO_DATA_RETURNED  = 10;
       ERR_EMPTY_REQUEST     = 11;
       ERR_MALFORMED_REQUEST = 12;
+      ERR_NO_CHANNEL        = 13;
+      ERR_ERRORED_STREAM    = 14;
+      ERR_NO_SUCH_DEVICE    = 15;
 
 const BAD_JSON = '{"result":"BAD","code":1}';
       OK_JSON  = '{"result":"OK"}';
@@ -213,6 +256,9 @@ const BAD_JSON = '{"result":"BAD","code":1}';
       BAD_JSON_NO_DATA_RETURNED  = '{"result":"BAD","code":10}';
       BAD_JSON_EMPTY_REQUEST     = '{"result":"BAD","code":11}';
       BAD_JSON_MALFORMED_REQUEST = '{"result":"BAD","code":12}';
+      BAD_JSON_NO_SUCH_DEVICE    = '{"result":"BAD","code":15}';
+
+      BAD_JSON_SCISSOR           = '{"result":"BAD","code":%d}';
 
       cOK = 'OK';
 
@@ -266,29 +312,61 @@ begin
   end;
 end;
 
-function GetClientId(const sIP, sHash : String) : TDeviceId;
+
+function GetForeignClientId(accId : TDBID; const aDevice : String) : TDBID;
 var
-  Res : Array [0..2] of Variant;
+  Res : Array [0..0] of Variant;
+begin
+  try
+    if Length(aDevice) > 0 then
+    begin
+      if vUsersDB.PREP_GetSessionByDevice.ExecToValue([accId, aDevice], @Res) = erOkWithData then
+      begin
+        Result := Res[0];
+      end else
+        Result := 0;
+    end else
+      Result := 0;
+  except
+    Result := 0;
+  end;
+end;
+
+function GetClientIdUpdate(const sIP, sHash : String; needUpd : Boolean) : TDeviceId;
+var
+  Res : Array [0..3] of Variant;
 begin
   try
     if Length(sHash) > 0 then
     begin
       if vUsersDB.PREP_GetClientByHash.ExecToValue([sHash], @Res) = erOkWithData then
       begin
-        if SameText(sIP, Res[2]) then
+        if SameText(sIP, Res[3]) then
         begin
-          Result.id := Res[0];
-          Result.device := Res[1];
-          vUsersDB.PREP_UpdateSession.Execute([sHash]);
+          Result.sid := Res[0];
+          Result.cid  := Res[1];
+          Result.device := Res[2];
+          if needUpd then
+            vUsersDB.PREP_UpdateSession.Execute([sHash]);
         end else
-          Result.id := -1;
+          Result.cid := 0;
       end else
-        Result.id := -1;
+        Result.cid := 0;
     end else
-      Result.id := -1;
+      Result.cid := 0;
   except
-    Result.id := -1;
+    Result.cid := 0;
   end;
+end;
+
+function GetClientId(const sIP, sHash : String) : TDeviceId;
+begin
+  Result := GetClientIdUpdate(sIP, sHash, true);
+end;
+
+function GetClientIdSilent(const sIP, sHash : String) : TDeviceId;
+begin
+  Result := GetClientIdUpdate(sIP, sHash, false);
 end;
 
 function HeartBit(const sIP, sHash : String) : String;
@@ -297,7 +375,7 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
       Result := OK_JSON
     else
       Result := BAD_JSON_NO_SUCH_SESSION;
@@ -357,14 +435,14 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then begin
+    if cid.cid > 0 then begin
       jArr := TJSONArray.Create;
       jRes := TJSONObject.Create([cCONFIG, jArr,
                                   cRESULT, cOK]);
       vUsersDB.PREP_GetConf.Lock;
       try
         with vUsersDB.PREP_GetConf do
-        if OpenDirect([cid.id]) then
+        if OpenDirect([cid.cid]) then
         begin
           repeat
             jObj := TJSONObject.Create([cKIND,    AsInt32[0],
@@ -391,6 +469,60 @@ begin
   end;
 end;
 
+function DoRawInputData(aStream : TWCRESTWebCamStream;
+                        aRef : TWCRequestRefWrapper) : Integer;
+begin
+  if aRef is TWCHTTP2IncomingChunk then
+  begin
+    aStream.WriteData(TWCHTTP2IncomingChunk(aRef));
+    Result := ERR_NO_ERROR;
+  end else
+    Result := ERR_INTERNAL_UNK;
+end;
+
+function RawInputData(const sIP, sHash : String;
+                             Ref : TWCRequestRefWrapper) : Integer;
+var
+  cid  : TDeviceId;
+  aStream : TWCRESTWebCamStream;
+  aHttp2Stream : TWCHTTP2Stream;
+begin
+  try
+    if Ref is TWCHTTP2IncomingChunk then
+      aHttp2Stream := TWCHTTP2IncomingChunk(Ref).Stream
+    else
+    if Ref is TWCHTTP2Stream then
+      aHttp2Stream := TWCHTTP2Stream(Ref) else
+      Exit(ERR_INTERNAL_UNK);
+
+    if assigned(aHttp2Stream.ExtData) then
+      aStream := TWCRESTWebCamStream(aHttp2Stream.ExtData) else
+    begin
+      cid := GetClientIdSilent(sIP, sHash);
+
+      if cid.sid > 0 then begin
+        aStream := TRESTWebCamStreams.AddStream(aHttp2Stream, cid.sid);
+        aHttp2Stream.ExtData := aStream;
+        aHttp2Stream.OwnExtData := false;
+      end
+      else
+        Exit(ERR_NO_SUCH_SESSION);
+    end;
+
+    if Assigned(aStream) then
+    begin
+      if aStream.ErrorCode <> ERR_NO_ERROR then
+        Result := ERR_ERRORED_STREAM else
+        Result := DoRawInputData(aStream, Ref);
+    end else
+      Result := ERR_NO_CHANNEL;
+
+  except
+    on e : EDatabaseError do Result := ERR_DATABASE_FAIL;
+    else Result := ERR_INTERNAL_UNK;
+  end;
+end;
+
 function SetConfig(const sIP, sHash, sConfig : String) : String;
 var
   jArr : TJSONArray;
@@ -404,7 +536,7 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then begin
+    if cid.cid > 0 then begin
       jD := GetJSON(sConfig);
       if Assigned(jD) then
       begin
@@ -434,7 +566,7 @@ begin
                   end;
 
                   if length(values_list) > 0 then values_list := values_list + ',';
-                  values_list := values_list + Format('(%d, %d, %g)', [cid.id, k, fv], fs);
+                  values_list := values_list + Format('(%d, %d, %g)', [cid.cid, k, fv], fs);
                 end;
               end;
               if Length(values_list) > 0 then
@@ -471,7 +603,7 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
       devs := TJSONArray.Create;
       res := TJSONObject.Create([cRESULT, cOK, cDEVICES, devs]);
@@ -479,7 +611,7 @@ begin
         vUsersDB.PREP_GetListOfDevices.Lock;
         try
           with vUsersDB.PREP_GetListOfDevices do
-          if OpenDirect([cid.id]) then
+          if OpenDirect([cid.cid]) then
           begin
             repeat
               devs.Add(TJSONObject.Create([cDEVICE, AsString[0],
@@ -517,9 +649,9 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
-      if vUsersDB.PREP_GetRecordMeta.ExecToValue([cid.id, recId],
+      if vUsersDB.PREP_GetRecordMeta.ExecToValue([cid.cid, recId],
                                                  @Res) = erOkWithData then
       begin
         jsonObj := TJSONObject.Create([cDEVICE,VarToStr(Res[0]),
@@ -552,12 +684,12 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
       vUsersDB.PREP_GetRecordData.Lock;
       try
         with vUsersDB.PREP_GetRecordData do
-        if OpenDirect([cid.id, recId]) then
+        if OpenDirect([cid.cid, recId]) then
         begin
           ptr := AsBlob[0];
           if Assigned(ptr.Data) then
@@ -593,7 +725,7 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
       jsonArr := TJSONArray.Create;
       jsonRes := TJSONObject.Create([cRECORDS, jsonArr]);
@@ -601,7 +733,7 @@ begin
         vUsersDB.PREP_GetRecordCount.Lock;
         try
           with vUsersDB.PREP_GetRecordCount do
-          if OpenDirect([cid.id, FromLastStamp]) then
+          if OpenDirect([cid.cid, FromLastStamp]) then
           begin
             repeat
               jsonObj := TJSONObject.Create([cRID,    AsInt32[0],
@@ -640,7 +772,7 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
       jD := GetJSON(sRecords);
       if Assigned(jD) then
@@ -656,7 +788,7 @@ begin
               if (jArr[0] is TJSONIntegerNumber) and
                  (jArr[0].AsInteger >= 0) then
               begin
-                vUsersDB.PREP_DeleteRecord.Execute([cid.id, jArr[0].AsInteger]);
+                vUsersDB.PREP_DeleteRecord.Execute([cid.cid, jArr[0].AsInteger]);
                 Result := OK_JSON;
               end else
                 Result := BAD_JSON_MALFORMED_REQUEST;
@@ -683,10 +815,10 @@ begin
               begin
                 if hasneg then
                 begin
-                  vUsersDB.PREP_DeleteRecordsFrom.Execute([cid.id, k]);
+                  vUsersDB.PREP_DeleteRecordsFrom.Execute([cid.cid, k]);
                 end;
                 vUsersDB.Execute('delete from sessions where '+
-                                 '(cid == ' +inttostr(cid.id) +
+                                 '(cid == ' +inttostr(cid.cid) +
                                  ') and (id in (' + values_list + '));');
                 Result := OK_JSON;
               end else
@@ -695,7 +827,7 @@ begin
           end else
           if jD is TJSONIntegerNumber then
           begin
-            vUsersDB.PREP_DeleteRecord.Execute([cid.id, jD.AsInteger]);
+            vUsersDB.PREP_DeleteRecord.Execute([cid.cid, jD.AsInteger]);
             Result := OK_JSON;
           end else
             Result := BAD_JSON_MALFORMED_REQUEST;
@@ -727,7 +859,7 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
       jsonObj := nil;
       try
@@ -742,7 +874,7 @@ begin
            SameText(jsonStr.AsString, cSYNC) then
         begin
           // client trying to get msgs from the last sync
-          FromLastStamp := vUsersDB.PREP_GetLastSync.QuickQuery([cid.id,
+          FromLastStamp := vUsersDB.PREP_GetLastSync.QuickQuery([cid.cid,
                                                                  cid.device],
                                                                  nil, false);
         end else
@@ -751,7 +883,7 @@ begin
       end;
 
       if DoSync then
-        vUsersDB.PREP_AddSync.Execute([cid.id, cid.device]);
+        vUsersDB.PREP_AddSync.Execute([cid.cid, cid.device]);
 
       jsonArr := TJSONArray.Create;
       jsonRes := TJSONObject.Create([cMSGS, jsonArr,
@@ -760,7 +892,7 @@ begin
         vUsersDB.PREP_GetMsgs.Lock;
         try
           with vUsersDB.PREP_GetMsgs do
-          if OpenDirect([cid.id, FromLastStamp, cid.device]) then
+          if OpenDirect([cid.cid, FromLastStamp, cid.device]) then
           begin
             //request format:
              //msg, device, params, stamp
@@ -802,7 +934,7 @@ var
 begin
   try
     cid := GetClientId(Req.RemoteAddress, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
       if assigned(Req.ContentStream) then
       begin
@@ -811,7 +943,7 @@ begin
           ptr.Data := TCustomMemoryStream(Req.ContentStream).Memory;
           ptr.SizeOfData := TCustomMemoryStream(Req.ContentStream).Size;
           ptr.destr := nil; //static
-          vUsersDB.PREP_AddRecord.Execute([cid.id, cid.device, sMeta, @ptr]);
+          vUsersDB.PREP_AddRecord.Execute([cid.cid, cid.device, sMeta, @ptr]);
           Result := OK_JSON;
         end else
           Result := BAD_JSON_INTERNAL_UNK;
@@ -833,9 +965,9 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
-      vUsersDB.PREP_AddMsg.Execute([cid.id, sMsg, cid.device, aTarget, aParams]);
+      vUsersDB.PREP_AddMsg.Execute([cid.cid, sMsg, cid.device, aTarget, aParams]);
       Result := OK_JSON;
     end else
       Result := BAD_JSON_NO_SUCH_SESSION;
@@ -856,7 +988,7 @@ var
 begin
   try
     cid := GetClientId(sIP, sHash);
-    if cid.id >= 0 then
+    if cid.cid > 0 then
     begin
       for i := 0 to arr.Count-1 do
       begin
@@ -873,7 +1005,7 @@ begin
             aParams := jField.AsJSON;
           end else
             aParams := JSON_EMPTY_OBJ;
-          vUsersDB.PREP_AddMsg.Execute([cid.id, sMsg, cid.device, aTarget, aParams]);
+          vUsersDB.PREP_AddMsg.Execute([cid.cid, sMsg, cid.device, aTarget, aParams]);
         end;
       end;
       Result := OK_JSON;
@@ -1000,9 +1132,17 @@ begin
                                             '(device == ?2) and '+
                                             '(msg == ''sync'') '+
                                             'order by stamp desc limit 1;');
-    PREP_GetClientByHash := FUsersDB.AddNewPrep('select cid, device, ip '+
+    PREP_GetClientByHash := FUsersDB.AddNewPrep('select id, cid, device, ip '+
                                             'from sessions where shash == ?1 '+
                                             'limit 1;');
+    PREP_GetSessionByDevice := FUsersDB.AddNewPrep('select id '+
+                                            'from sessions where cid == ?1 and '+
+                                            'device == ?2 '+
+                                            'order by stamp desc limit 1;');
+    PREP_GetSessions := FUsersDB.AddNewPrep('select * from (select id, cid '+
+                                            'from sessions order by id desc) '+
+                                            'group by cid;');
+
     PREP_AddRecord := FUsersDB.AddNewPrep('INSERT INTO records '+
                                           '(cid, device, metadata, data) '+
                                           'values (?1, ?2, ?3, ?4);');
@@ -1184,6 +1324,26 @@ procedure TRESTWebCamUsersDB.MaintainStep1hr;
 begin
   PREP_MaintainStep1.Execute;
   PREP_MaintainStep7.Execute;
+end;
+
+procedure TRESTWebCamUsersDB.CheckSSIDs(ids : TFastMapUInt);
+var i : integer;
+begin
+  for i := 0 to ids.Count-1 do
+    ids.List^[i].UIntValue := 1;
+
+  PREP_GetSessions.Lock;
+  try
+    //get list of all sessions
+    with PREP_GetSessions do
+    if OpenDirect([]) then
+      repeat
+        ids.Value[AsInt64[0]] := 0;
+      until not Step;
+    PREP_GetSessions.Close;
+  finally
+    PREP_GetSessions.UnLock;
+  end;
 end;
 
 class function TRESTWebCamUsersDB.UsersDB : TRESTWebCamUsersDB;
@@ -1383,6 +1543,161 @@ begin
   inherited Execute;
 end;
 
+{ TWCRawInputStream }
+
+procedure TWCRawInputStream.Execute;
+
+procedure CloseStream;
+var http2strm : TWCHTTP2Stream;
+begin
+  if Request.WCContent.RequestRef is TWCHTTP2Stream then
+    http2strm := TWCHTTP2Stream(Request.WCContent.RequestRef) else
+  if Request.WCContent.RequestRef is TWCHTTP2IncomingChunk then
+    http2strm := TWCHTTP2IncomingChunk(Request.WCContent.RequestRef).Stream else
+    http2strm := nil;
+  if assigned(http2strm) then begin
+    http2strm.IncReference;
+    http2strm.ResetStream(H2E_REFUSED_STREAM);
+  end;
+end;
+
+var Res : Integer;
+begin
+  ResponseReadyToSend := false; // prevent to send response
+
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH],
+                             Params, ['']) then
+  begin
+    if (Length(Params[0]) > 0) then
+    begin
+      Res := RawInputData(Request.RemoteAddress, Params[0],
+                                                 Request.WCContent.RequestRef);
+
+      if Res <> ERR_NO_ERROR then
+        CloseStream;
+    end else
+      CloseStream;
+  end else
+      CloseStream;
+
+  inherited Execute;
+end;
+
+{ TWCRawOutputStream }
+
+procedure TWCRawOutputStream.Execute;
+var
+  cid : TDeviceId;
+  fid : TDBID;
+  S : String;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cDEVICE],
+                             Params, ['', '']) then
+  begin
+    if (Length(Params[0]) > 0) and
+       (Length(Params[1]) > 0) then
+    begin
+      try
+        cid := GetClientId(Request.RemoteAddress, Params[0]);
+        if cid.cid > 0 then
+        begin
+          fid := GetForeignClientId(cid.cid, Params[1]);
+          if fid > 0 then
+          begin
+            Application.WCServer.AddSortedJob(TWCRawOutputSynchroJob.Create(Connection, fid));
+            ReleaseConnection;
+            ResponseReadyToSend := false; // prevent to send response
+            S := '';
+          end else
+            S := BAD_JSON_NO_SUCH_DEVICE;
+        end else
+          S := BAD_JSON_NO_SUCH_SESSION;
+      except
+        on e : EDatabaseError do S := BAD_JSON_DATABASE_FAIL;
+        on e : EJSONParser do S := BAD_JSON_JSON_PARSER_FAIL;
+        on e : EJSON do S := BAD_JSON_JSON_FAIL;
+        else S := BAD_JSON_INTERNAL_UNK;
+      end;
+      if Length(S) > 0 then
+        Response.Content := S;
+    end else
+      Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  end else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCRawOutputSynchroJob }
+
+constructor TWCRawOutputSynchroJob.Create(aConn : TWCAppConnection; sID : TDBID
+  );
+begin
+  inherited Create(aConn);
+  FSID := sID;
+  FStage := 0;
+  FLastFrameId := 0;
+end;
+
+procedure TWCRawOutputSynchroJob.Execute;
+var aStrm  : TWCRESTWebCamStream;
+    aFrame : TWCRESTWebCamStreamFrame;
+
+procedure SendResponse;
+begin
+  try
+    if not Response.HeadersSent then
+      Response.SendHeaders;
+
+    Response.SendRawData(aFrame.FrameData, aFrame.FrameSize);
+
+  except
+    //maybe connection dropped or other write error
+    on e : Exception do
+      Application.DoError(e.Message);
+  end;
+end;
+
+begin
+  ResponseReadyToSend := false;
+  if FStage = 0 then
+  begin
+    Response.Code:=200;
+    Response.CacheControl:='no-cache';
+    Response.KeepStreamAlive:=true;
+    FStage := 1;
+  end;
+  try
+    try
+      if FStage = 1 then
+      begin
+        FStage := 2; // set here to react on exceptions and exits
+        if not Connection.RefCon.ConnectionAvaible then Exit;
+        //get stream
+        aStrm := TRESTWebCamStreams.FindStream(FSID);
+        if Assigned(aStrm) then
+        begin
+          //get frame
+          aFrame := aStrm.GetCompletedFrame(FLastFrameId);
+          if Assigned(aFrame) then
+          begin
+            //send new data
+            SendResponse;
+            FLastFrameId := aFrame.FrameID;
+            aFrame.DecReference;
+            RestartJob(400, GetTickCount64);
+          end else
+            RestartJob(200, GetTickCount64);
+          FStage := 1;
+        end;
+      end;
+    except
+      FStage := 2;
+    end;
+  finally
+    if FStage = 2 then
+      Response.CloseStream;
+  end;
+end;
 
 { TWCTest }
 

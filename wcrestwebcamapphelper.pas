@@ -12,7 +12,8 @@ interface
 uses
   Classes, SysUtils,
   wcApplication,
-  ECommonObjs;
+  wcHTTP2Con,
+  ECommonObjs, OGLFastNumList;
 
 type
 
@@ -50,9 +51,16 @@ type
     procedure DoHelp(aData : TObject); override;
   end;
 
+  { THTTP2WebCamServerHelper }
+
+  THTTP2WebCamServerHelper = class(TWCHTTP2ServerHelper)
+  public
+    procedure ConfigureStream(aStrm : TWCHTTP2Stream); override;
+  end;
+
 implementation
 
-uses wcConfig, WCRESTWebCamJobs;
+uses wcConfig, WCRESTWebCamJobs, WCRESTWebCamStreams, HTTP2HTTP1Conv, extuhpack;
 
 const CFG_RESTJSON_SEC = $2000;
       CFG_RESTJSON_DB  = $2001;
@@ -66,6 +74,31 @@ const CFG_RESTJSON_SEC = $2000;
 
 var vRJServerConfigHelper : TRESTJsonConfigHelper = nil;
 
+{ THTTP2WebCamServerHelper }
+
+procedure THTTP2WebCamServerHelper.ConfigureStream(aStrm : TWCHTTP2Stream);
+var i : integer;
+    p : PHPackHeaderTextItem;
+    h2 : THTTP2Header;
+begin
+  inherited ConfigureStream(aStrm);
+  for i := 0 to aStrm.Request.Headers.Count-1 do
+  begin
+    P := aStrm.Request.Headers[i];
+    h2 := HTTP2HeaderType(P^.HeaderName);
+    if h2 = hh2Path then
+    begin
+      if (Length(p^.HeaderValue) > Length(cRawInputStream)) and
+         SameStr(Copy(p^.HeaderValue, 1, Length(cRawInputStream)),
+                                      cRawInputStream) then
+      begin
+        aStrm.ChunkedRequest := true;
+      end;
+      break;
+    end;
+  end;
+end;
+
 { TRESTJsonIdleHelper }
 
 constructor TRESTJsonIdleHelper.Create;
@@ -76,6 +109,7 @@ begin
 end;
 
 procedure TRESTJsonIdleHelper.DoHelp(aData : TObject);
+var ids : TFastMapUInt;
 begin
   With TWCTimeStampObj(aData) do
   begin
@@ -83,6 +117,17 @@ begin
     if (Tick > MTick10s) and ((Tick - MTick10s) > 10000) then
     begin
       TRESTWebCamUsersDB.UsersDB.MaintainStep10s;
+      TRESTWebCamStreams.WebCamStreams.MaintainStep10s;
+      ids := TRESTWebCamStreams.MapSSIDs;
+      try
+        if ids.Count > 0 then
+        begin
+          TRESTWebCamUsersDB.UsersDB.CheckSSIDs(ids);
+          TRESTWebCamStreams.RemoveClosedSessions(ids);
+        end;
+      finally
+        ids.Free;
+      end;
       MTick10s := Tick;
     end;
     //every 60 sec

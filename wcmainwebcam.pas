@@ -70,6 +70,10 @@ begin
       Result := nil;
     end;
   end else begin
+    if SameText(cRawInputStream, Request.PathInfo) then
+      Result := TWCRawInputStream.Create(Connection) else
+    if SameText(cRawOutputStream, Request.PathInfo) then
+      Result := TWCRawOutputStream.Create(Connection) else
     if SameText('/test.json', Request.PathInfo) then
       Result := TWCTest.Create(Connection) else
     begin
