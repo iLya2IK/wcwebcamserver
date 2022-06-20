@@ -92,7 +92,7 @@ begin
          SameStr(Copy(p^.HeaderValue, 1, Length(cRawInputStream)),
                                       cRawInputStream) then
       begin
-        aStrm.ChunkedRequest := true;
+        aStrm.ChunkedRequest := h2icmSerial;
       end;
       break;
     end;

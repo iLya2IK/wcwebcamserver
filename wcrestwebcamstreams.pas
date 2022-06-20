@@ -236,6 +236,7 @@ end;
 
 constructor TWCRESTWebCamStreamChunk.Create(aData : TWCHTTP2IncomingChunk);
 begin
+  FPosition := 0;
   FData := aData;
   FData.IncReference;
 end;
@@ -386,6 +387,8 @@ constructor TWCRESTWebCamStream.Create(aRef : TWCHTTP2Stream; aSID : Cardinal);
 begin
   inherited Create;
 
+  FErrorCode := 0;
+
   aRef.IncReference;
   FHTTP2S := aRef;
   FKey := aSID;
@@ -404,13 +407,18 @@ end;
 
 destructor TWCRESTWebCamStream.Destroy;
 begin
-  FHTTP2S.ExtData := nil;
-  FHTTP2S.DecReference;
+  Lock;
+  try
+    FHTTP2S.ExtData := nil;
+    FHTTP2S.DecReference;
 
-  FFrameBuffer.Free;
-  FFrames.Clean;
-  FFrames.Free;
-  FChunks.Free;
+    FFrameBuffer.Free;
+    FFrames.Clean;
+    FFrames.Free;
+    FChunks.Free;
+  finally
+    UnLock;
+  end;
   inherited Destroy;
 end;
 
@@ -459,10 +467,10 @@ begin
         P := TopChunk.Size;
         if P > BufferFreeSize then P := BufferFreeSize;
         FFrameBuffer.Write(TopChunk.Memory^, P);
-        TopChunk.Position := P;
+        TopChunk.Position := TopChunk.Position + P;
         if TopChunk.Empty then
           FChunks.PopValue.Free;
-        FFrameBufferSize := FFrameBuffer.Position;
+        Inc(FFrameBufferSize, P);
       end;
 
       FFrameBuffer.Position := BP;
@@ -507,6 +515,7 @@ begin
             FFrameState := fstWaitingStartOfFrame;
           end else
           begin
+            FFrameState := fstWaitingStartOfFrame;
             TruncateFrameBuffer;
             if ChunkCount = 0 then
               Exit;
@@ -554,9 +563,10 @@ end;
 
 function TWCRESTWebCamStreams.IsStrmClosed(aStrm: TObject; {%H-}data: pointer): Boolean;
 begin
-  Result := TWCRESTWebCamStream(aStrm).HTTP2Stream.StreamState in [h2ssCLOSED,
+  Result := (TWCRESTWebCamStream(aStrm).HTTP2Stream.StreamState in [h2ssCLOSED,
                                                                    h2ssHLFCLOSEDRem,
-                                                                   h2ssHLFCLOSEDLoc];
+                                                                   h2ssHLFCLOSEDLoc]) or
+            (TWCRESTWebCamStream(aStrm).ErrorCode <> 0);
 end;
 
 function TWCRESTWebCamStreams.IsSessionClosed(aStrm : TObject; data : pointer
