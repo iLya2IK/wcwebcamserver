@@ -863,7 +863,11 @@ begin
     begin
       jsonObj := nil;
       try
-        jsonObj := TJSONObject(GetJSON(FromLastStamp));
+        if (Length(FromLastStamp) > 0) and
+           (FromLastStamp[1] = '{') then
+        begin
+          jsonObj := TJSONObject(GetJSON(FromLastStamp));
+        end;
       except
         if assigned(jsonObj) then FreeAndNil(jsonObj);
       end;
@@ -1139,9 +1143,9 @@ begin
                                             'from sessions where cid == ?1 and '+
                                             'device == ?2 '+
                                             'order by stamp desc limit 1;');
-    PREP_GetSessions := FUsersDB.AddNewPrep('select * from (select id, cid '+
+    PREP_GetSessions := FUsersDB.AddNewPrep('select * from (select id, cid, device '+
                                             'from sessions order by id desc) '+
-                                            'group by cid;');
+                                            'group by cid, device;');
 
     PREP_AddRecord := FUsersDB.AddNewPrep('INSERT INTO records '+
                                           '(cid, device, metadata, data) '+
@@ -1688,7 +1692,8 @@ begin
           end else
             RestartJob(200, GetTickCount64);
           FStage := 1;
-        end;
+        end else
+          FStage := 2;
       end;
     except
       FStage := 2;

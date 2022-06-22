@@ -367,7 +367,8 @@ end;
 
 procedure TWCRESTWebCamStream.PushFrame(aStartAt : Int64);
 begin
-  //FFrames.CleanDead;
+  if FFrames.Count > 10 then
+    FFrames.CleanDead;
 
   if Assigned(FActiveFrame) then
     FActiveFrame.DecReference;
@@ -558,14 +559,15 @@ end;
 
 function OnWebCamStreamsKeyCompare(Item1, Item2: Pointer): Integer;
 begin
-  Result := CompareValue(PCardinal(Item1)^, TWCRESTWebCamStream(Item2).Key);;
+  Result := CompareValue(Integer(PCardinal(Item1)^),
+                         Integer(TWCRESTWebCamStream(Item2).Key));
 end;
 
 function TWCRESTWebCamStreams.IsStrmClosed(aStrm: TObject; {%H-}data: pointer): Boolean;
 begin
   Result := (TWCRESTWebCamStream(aStrm).HTTP2Stream.StreamState in [h2ssCLOSED,
-                                                                   h2ssHLFCLOSEDRem,
-                                                                   h2ssHLFCLOSEDLoc]) or
+                                                                    h2ssHLFCLOSEDRem,
+                                                                    h2ssHLFCLOSEDLoc]) or
             (TWCRESTWebCamStream(aStrm).ErrorCode <> 0);
 end;
 
@@ -630,8 +632,8 @@ end;
 function TWCRESTWebCamStreams.OnCompareMethod(Tree : TAvgLvlTree; Data1,
   Data2 : Pointer) : integer;
 begin
-  Result := CompareValue(TWCRESTWebCamStream(Data1).Key,
-                           TWCRESTWebCamStream(Data2).Key);
+  Result := CompareValue(Integer(TWCRESTWebCamStream(Data1).Key),
+                           Integer(TWCRESTWebCamStream(Data2).Key));
 end;
 
 constructor TWCRESTWebCamStreams.Create;
