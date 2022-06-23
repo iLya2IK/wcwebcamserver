@@ -46,7 +46,9 @@ uses
   wcdeflatedecoder,
   WCRESTWebCamStreams;
 
+{$ifdef linux}
 {$linklib libc}
+{$endif}
 
 var Conf : TWCConfig;
 {$IFDEF LOAD_DYNAMICALLY}
