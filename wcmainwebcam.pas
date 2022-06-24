@@ -45,6 +45,7 @@ begin
   WCJobsTree.Values['/getMsgs.json']          := TWCGetMsgs;
   WCJobsTree.Values['/getMsgsAndSync.json']   := TWCGetMsgsAndSync;
   WCJobsTree.Values['/getDevicesOnline.json'] := TWCGetListOfDevices;
+  WCJobsTree.Values['/getStreams.json']       := TWCGetStreams;
   WCJobsTree.Values['/getConfig.json']        := TWCGetConfig;
   WCJobsTree.Values['/setConfig.json']        := TWCSetConfig;
   WCJobsTree.Values['/heartBit.json']         := TWCHeartBit;
