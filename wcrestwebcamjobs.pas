@@ -321,14 +321,14 @@ begin
 end;
 
 
-function GetForeignClientId(accId : TDBID; const aDevice : String) : TDBID;
+function GetForeignClientId(acId : TDBID; const aDevice : String) : TDBID;
 var
   Res : Array [0..0] of Variant;
 begin
   try
     if Length(aDevice) > 0 then
     begin
-      if vUsersDB.PREP_GetSessionByDevice.ExecToValue([accId, aDevice], @Res) = erOkWithData then
+      if vUsersDB.PREP_GetSessionByDevice.ExecToValue([acId, aDevice], @Res) = erOkWithData then
       begin
         Result := Res[0];
       end else
@@ -342,27 +342,24 @@ end;
 
 function GetClientIdUpdate(const sIP, sHash : String; needUpd : Boolean) : TDeviceId;
 var
-  Res : Array [0..3] of Variant;
+  Res : Array [0..2] of Variant;
 begin
+  Result.sid := 0;
+  Result.cid := 0;
   try
     if Length(sHash) > 0 then
     begin
-      if vUsersDB.PREP_GetClientByHash.ExecToValue([sHash], @Res) = erOkWithData then
+      if vUsersDB.PREP_GetClientByHash.ExecToValue([sHash, sIP], @Res) = erOkWithData then
       begin
-        if SameText(sIP, Res[3]) then
-        begin
-          Result.sid := Res[0];
-          Result.cid  := Res[1];
-          Result.device := Res[2];
-          if needUpd then
-            vUsersDB.PREP_UpdateSession.Execute([sHash]);
-        end else
-          Result.cid := 0;
-      end else
-        Result.cid := 0;
-    end else
-      Result.cid := 0;
+        Result.sid    := Res[0];
+        Result.cid    := Res[1];
+        Result.device := Res[2];
+        if needUpd then
+          vUsersDB.PREP_UpdateSession.Execute([sHash]);
+      end;
+    end;
   except
+    Result.sid := 0;
     Result.cid := 0;
   end;
 end;
@@ -880,7 +877,7 @@ begin
                 begin
                   vUsersDB.PREP_DeleteRecordsFrom.Execute([accid.cid, k]);
                 end;
-                vUsersDB.Execute('delete from sessions where '+
+                vUsersDB.Execute('delete from records where '+
                                  '(cid == ' +inttostr(accid.cid) +
                                  ') and (id in (' + values_list + '));');
                 Result := OK_JSON;
@@ -1200,18 +1197,18 @@ begin
                                             '(device == ?2) and '+
                                             '(msg == ''sync'') '+
                                             'order by stamp desc limit 1;');
-    PREP_GetClientByHash := FUsersDB.AddNewPrep('select id, cid, device, ip '+
-                                            'from sessions where shash == ?1 '+
+    PREP_GetClientByHash := FUsersDB.AddNewPrep('select id, cid, device '+
+                                            'from sessions where shash == ?1 and ip == ?2 '+
                                             'limit 1;');
     PREP_GetSessionByDevice := FUsersDB.AddNewPrep('select id '+
                                             'from sessions where cid == ?1 and '+
                                             'device == ?2 '+
                                             'order by stamp desc limit 1;');
     PREP_GetSessions := FUsersDB.AddNewPrep('select * from (select id, cid, device '+
-                                            'from sessions order by id desc) '+
+                                            'from sessions order by stamp desc) '+
                                             'group by cid, device;');
     PREP_GetSessionsByCID := FUsersDB.AddNewPrep('select * from (select id, device '+
-                                            'from sessions where cid == ? order by id desc) '+
+                                            'from sessions where cid == ? order by stamp desc) '+
                                             'group by device;');
 
     PREP_AddRecord := FUsersDB.AddNewPrep('INSERT INTO records '+
