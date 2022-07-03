@@ -6,6 +6,7 @@ The server operates in the REST architecture mode. The server can accept POST re
 The server is designed to collect images from cameras (devices) and forwards messages between devices to control the periphery via an HTTP 2 connection. 
 A detailed implementation of an external device based on "ESP32-CAM" is given in the example [webcamdevice](https://github.com/iLya2IK/webcamdevice).
 The example of a desktop application for external device controlling and viewing images is [webcamclientviewer](https://github.com/iLya2IK/webcamclientviewer).
+An example of an Android application for controlling external devices, chatting and streaming is [wcwebcameracontrol](https://github.com/iLya2IK/wcwebcameracontrol).
 
 # How to deal with the server example?
 * Build it using the necessary development environment and libraries or download precompiled release.
