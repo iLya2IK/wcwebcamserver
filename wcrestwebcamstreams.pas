@@ -73,6 +73,8 @@ type
     FFrameSize   : Cardinal;
     FFrameBufferSize : Cardinal;
     FFrameID : QWord;
+    FSubProtocol : String;
+    FDelta : Integer;
 
     FErrorCode : Cardinal;
 
@@ -89,7 +91,8 @@ type
     procedure PushFrame(aStartAt : Int64);
     procedure TryConsumeFrames;
   public
-    constructor Create(aRef : TWCHTTP2Stream; aSID : Cardinal);
+    constructor Create(aRef : TWCHTTP2Stream; aSID : Cardinal;
+                            const aSubProtocol : String; aDelta : Integer);
     destructor Destroy; override;
 
     procedure  WriteData(aData : TWCHTTP2IncomingChunk);
@@ -107,6 +110,9 @@ type
     property   FrameID : QWord read GetFrameID;
 
     property   ErrorCode : Cardinal read GetErrorCode;
+
+    property   SubProtocol : String read FSubProtocol;
+    property   Delta : Integer read FDelta;
   end;
 
   { TWCRESTWebCamStreams }
@@ -128,7 +134,8 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    function AddStream(aRef : TWCHTTP2Stream; aSID : Cardinal) : TWCRESTWebCamStream;
+    function AddStream(aRef : TWCHTTP2Stream; aSID : Cardinal;
+      const aSubProtocol : String; aDelta : Integer) : TWCRESTWebCamStream;
     procedure RemoveStream(aSID : Cardinal);
     function  MapSSIDs : TFastMapUInt;
     procedure RemoveClosedSessions(ids : TFastMapUInt);
@@ -151,12 +158,17 @@ type
     procedure MaintainStep10s;
 
     class function WebCamStreams : TRESTWebCamStreams;
-    class function FindOrAddStream(aRef : TWCHTTP2Stream; aSID : Cardinal) : TWCRESTWebCamStream;
-    class function AddStream(aRef : TWCHTTP2Stream; aSID : Cardinal) : TWCRESTWebCamStream;
+    class function FindOrAddStream(aRef : TWCHTTP2Stream; aSID : Cardinal;
+      const aSubProtocol : String; aDelta : Integer) : TWCRESTWebCamStream;
+    class function AddStream(aRef : TWCHTTP2Stream; aSID : Cardinal;
+      const aSubProtocol : String; aDelta : Integer) : TWCRESTWebCamStream;
     class function FindStream(aSID : Cardinal) : TWCRESTWebCamStream;
+    class function HasStreams : Boolean;
     class function MapSSIDs : TFastMapUInt;
     class procedure RemoveClosedSessions(ids : TFastMapUInt);
     class procedure Finalize;
+    class procedure Lock;
+    class procedure UnLock;
 
     property Streams : TWCRESTWebCamStreams read FWebCamStreams;
   end;
@@ -283,25 +295,25 @@ begin
 end;
 
 class function TRESTWebCamStreams.FindOrAddStream(aRef : TWCHTTP2Stream;
-  aSID : Cardinal) : TWCRESTWebCamStream;
+  aSID : Cardinal; const aSubProtocol : String; aDelta : Integer) : TWCRESTWebCamStream;
 begin
   WebCamStreams.Streams.Lock;
   try
     Result := FindStream(aSID);
     if not assigned(Result) then
-      Result := WebCamStreams.Streams.AddStream(aRef, aSID);
+      Result := WebCamStreams.Streams.AddStream(aRef, aSID, aSubProtocol, aDelta);
   finally
     WebCamStreams.Streams.UnLock;
   end;
 end;
 
 class function TRESTWebCamStreams.AddStream(aRef : TWCHTTP2Stream;
-  aSID : Cardinal) : TWCRESTWebCamStream;
+  aSID : Cardinal; const aSubProtocol : String; aDelta : Integer) : TWCRESTWebCamStream;
 begin
   WebCamStreams.Streams.Lock;
   try
     WebCamStreams.Streams.RemoveStream(aSID);
-    Result := WebCamStreams.Streams.AddStream(aRef, aSID);
+    Result := WebCamStreams.Streams.AddStream(aRef, aSID, aSubProtocol, aDelta);
   finally
     WebCamStreams.Streams.UnLock;
   end;
@@ -311,6 +323,11 @@ class function TRESTWebCamStreams.FindStream(aSID : Cardinal
   ) : TWCRESTWebCamStream;
 begin
   Result := WebCamStreams.Streams.Stream(aSID);
+end;
+
+class function TRESTWebCamStreams.HasStreams : Boolean;
+begin
+  Result := WebCamStreams.Streams.Count > 0;
 end;
 
 class function TRESTWebCamStreams.MapSSIDs : TFastMapUInt;
@@ -326,6 +343,16 @@ end;
 class procedure TRESTWebCamStreams.Finalize;
 begin
   WebCamStreams.Streams.Finalize;
+end;
+
+class procedure TRESTWebCamStreams.Lock;
+begin
+  WebCamStreams.Streams.Lock;
+end;
+
+class procedure TRESTWebCamStreams.UnLock;
+begin
+  WebCamStreams.Streams.UnLock;
 end;
 
 { TWCRESTWebCamStream }
@@ -384,7 +411,8 @@ begin
   FFrames.Push_back(FActiveFrame);
 end;
 
-constructor TWCRESTWebCamStream.Create(aRef : TWCHTTP2Stream; aSID : Cardinal);
+constructor TWCRESTWebCamStream.Create(aRef : TWCHTTP2Stream; aSID : Cardinal;
+  const aSubProtocol : String; aDelta : Integer);
 begin
   inherited Create;
 
@@ -404,6 +432,9 @@ begin
   FFrameBufferSize := 0;
   FFrameSize := 0;
   FFrameID := 0;
+
+  FDelta := aDelta;
+  FSubProtocol := aSubProtocol;
 end;
 
 destructor TWCRESTWebCamStream.Destroy;
@@ -649,12 +680,12 @@ begin
   inherited Destroy;
 end;
 
-function TWCRESTWebCamStreams.AddStream(aRef : TWCHTTP2Stream; aSID : Cardinal
-  ) : TWCRESTWebCamStream;
+function TWCRESTWebCamStreams.AddStream(aRef : TWCHTTP2Stream; aSID : Cardinal;
+  const aSubProtocol : String; aDelta : Integer) : TWCRESTWebCamStream;
 begin
   Lock;
   try
-    Result := TWCRESTWebCamStream.Create(aRef, aSID);
+    Result := TWCRESTWebCamStream.Create(aRef, aSID, aSubProtocol, aDelta);
 
     FStreamTable.Add( Result );
     Push_back( Result );

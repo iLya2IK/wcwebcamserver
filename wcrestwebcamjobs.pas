@@ -294,6 +294,8 @@ const BAD_JSON = '{"result":"BAD","code":1}';
       cMAVALUE   = 'mav';
       cDEFVALUE  = 'dv';
       cFVALUE    = 'fv';
+      cSUBPROTO  = 'subproto';
+      cDELTA     = 'delta';
       SessionHash_GUID = AnsiString('4343726B-7F18-4D21-9297-1CC52FFA6F04');
 
 var MAX_ALLOWED_CONFIG_KIND : integer;
@@ -485,7 +487,7 @@ begin
     Result := ERR_INTERNAL_UNK;
 end;
 
-function RawInputData(const sIP, sHash : String;
+function RawInputData(const sIP, sHash, sSubProto : String; iDelta : Integer;
                              Ref : TWCRequestRefWrapper) : Integer;
 var
   accid  : TDeviceId;
@@ -506,7 +508,8 @@ begin
       accid := GetClientIdSilent(sIP, sHash);
 
       if accid.sid > 0 then begin
-        aStream := TRESTWebCamStreams.AddStream(aHttp2Stream, accid.sid);
+        aStream := TRESTWebCamStreams.AddStream(aHttp2Stream, accid.sid,
+                                                              sSubProto, iDelta);
         aHttp2Stream.ExtData := aStream;
         aHttp2Stream.OwnExtData := false;
       end
@@ -651,7 +654,8 @@ var
   res : TJSONObject;
   devs : TJSONArray;
   accid : TDeviceId;
-  fm : TFastMapUInt;
+  strm : TWCRESTWebCamStream;
+  sid : Int64;
 begin
   try
     accid := GetClientId(sIP, sHash);
@@ -660,32 +664,37 @@ begin
       devs := TJSONArray.Create;
       res := TJSONObject.Create([cRESULT, cOK, cDEVICES, devs]);
       try
-        fm := TRESTWebCamStreams.MapSSIDs;
-        try
-          if fm.Count > 0 then
-          begin
-            vUsersDB.PREP_GetSessionsByCID.Lock;
-            try
-              with vUsersDB.PREP_GetSessionsByCID do
-              if OpenDirect([accid.cid]) then
-              begin
-                repeat
-                  if fm.IndexOfKey(AsInt64[0]) >= 0 then
-                    devs.Add(TJSONObject.Create([cDEVICE, AsString[1]]));
-                until not Step;
-              end else
-              begin
-                FreeAndNil(res);
-                Result := BAD_JSON_NO_DEVICES;
-              end;
-              vUsersDB.PREP_GetSessionsByCID.Close;
-            finally
-              vUsersDB.PREP_GetSessionsByCID.UnLock;
+        if TRESTWebCamStreams.HasStreams then
+        begin
+          vUsersDB.PREP_GetSessionsByCID.Lock;
+          try
+            with vUsersDB.PREP_GetSessionsByCID do
+            if OpenDirect([accid.cid]) then
+            begin
+              repeat
+                sid := AsInt64[0];
+                TRESTWebCamStreams.Lock;
+                try
+                  strm := TRESTWebCamStreams.FindStream(sid);
+                  if assigned(strm) then
+                    devs.Add(TJSONObject.Create([cDEVICE, AsString[1],
+                                                 cSUBPROTO, strm.SubProtocol,
+                                                 cDELTA, strm.Delta]));
+                finally
+                  TRESTWebCamStreams.UnLock;
+                end;
+              until not Step;
+            end else
+            begin
+              FreeAndNil(res);
+              Result := BAD_JSON_NO_DEVICES;
             end;
+            vUsersDB.PREP_GetSessionsByCID.Close;
+          finally
+            vUsersDB.PREP_GetSessionsByCID.UnLock;
           end;
-        finally
-          fm.Free;
         end;
+
         if Assigned(res) then
           Result := res.AsJSON;
       finally
@@ -1644,12 +1653,12 @@ var Res : Integer;
 begin
   ResponseReadyToSend := false; // prevent to send response
 
-  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH],
-                             Params, ['']) then
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH, cSUBPROTO, cDELTA],
+                             Params, ['','',0]) then
   begin
     if (Length(Params[0]) > 0) then
     begin
-      Res := RawInputData(Request.RemoteAddress, Params[0],
+      Res := RawInputData(Request.RemoteAddress, Params[0], Params[1], Params[2],
                                                  Request.WCContent.RequestRef);
 
       if Res <> ERR_NO_ERROR then
@@ -1720,6 +1729,7 @@ end;
 procedure TWCRawOutputSynchroJob.Execute;
 var aStrm  : TWCRESTWebCamStream;
     aFrame : TWCRESTWebCamStreamFrame;
+    aDelta, aRDelta : Integer;
 
 procedure SendResponse;
 begin
@@ -1755,6 +1765,11 @@ begin
         aStrm := TRESTWebCamStreams.FindStream(FSID);
         if Assigned(aStrm) then
         begin
+          aDelta := aStrm.Delta;
+          if aDelta < 400 then aDelta := 400;
+          if aDelta > 60000 then aDelta := 60000;
+          aRDelta := aDelta div 2;
+          if aRDelta > 10000 then aRDelta := 10000;
           //get frame
           aFrame := aStrm.GetCompletedFrame(FLastFrameId);
           if Assigned(aFrame) then
@@ -1763,9 +1778,9 @@ begin
             SendResponse;
             FLastFrameId := aFrame.FrameID;
             aFrame.DecReference;
-            RestartJob(400, GetTickCount64);
+            RestartJob(aDelta, GetTickCount64);
           end else
-            RestartJob(200, GetTickCount64);
+            RestartJob(aRDelta, GetTickCount64);
           FStage := 1;
         end else
           FStage := 2;
