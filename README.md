@@ -3,10 +3,11 @@
 ## Short description
 
 The server operates in the REST architecture mode. The server can accept POST requests and respond with JSON objects. 
-The server is designed to collect images from cameras (devices) and forwards messages between devices to control the periphery via an HTTP 2 connection. 
-A detailed implementation of an external device based on "ESP32-CAM" is given in the example [webcamdevice](https://github.com/iLya2IK/webcamdevice).
-The example of a desktop application for external device controlling and viewing images is [webcamclientviewer](https://github.com/iLya2IK/webcamclientviewer).
-An example of an Android application for controlling external devices, chatting and streaming is [wcwebcameracontrol](https://github.com/iLya2IK/wcwebcameracontrol).
+The server is designed to collect images from cameras (devices) and forwards messages between devices to control the periphery via an HTTP 2 connection.  
+A detailed implementation of an external device based on "ESP32-CAM" is given in the example [webcamdevice (С)](https://github.com/iLya2IK/webcamdevice).
+Library for convenient client work with the wcWebCamServer server via the JSON protocol is [wcwebcamclient_lib (С/С++)](https://github.com/iLya2IK/wcwebcamclient_lib).
+The example of a desktop application for external device controlling and viewing images is [webcamclientviewer (Lazarus)](https://github.com/iLya2IK/webcamclientviewer).
+An example of an Android application for controlling external devices, chatting and streaming is [wcwebcameracontrol (Java)](https://github.com/iLya2IK/wcwebcameracontrol).
 
 # How to deal with the server example?
 * Build it using the necessary development environment and libraries or download precompiled release.
