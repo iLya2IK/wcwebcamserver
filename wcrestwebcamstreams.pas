@@ -16,24 +16,24 @@ uses
 
 type
 
-  { TWCRESTWebCamStreamChunk }
+    { TWCRESTWebCamStreamChunk }
 
-  TWCRESTWebCamStreamChunk = class
-  private
-    FData : TWCHTTP2IncomingChunk;
-    FPosition : Int64;
-    function GetMemory : Pointer;
-    function GetSize : Int64;
-  public
-    constructor Create(aData : TWCHTTP2IncomingChunk);
-    destructor Destroy; override;
+    TWCRESTWebCamStreamChunk = class
+    private
+      FData : TWCHTTP2IncomingChunk;
+      FPosition : Int64;
+      function GetMemory : Pointer;
+      function GetSize : Int64;
+    public
+      constructor Create(aData : TWCHTTP2IncomingChunk);
+      destructor Destroy; override;
 
-    function Empty : Boolean;
+      function Empty : Boolean;
 
-    property Size : Int64 read GetSize;
-    property Memory : Pointer read GetMemory;
-    property Position : Int64 read FPosition write FPosition;
-  end;
+      property Size : Int64 read GetSize;
+      property Memory : Pointer read GetMemory;
+      property Position : Int64 read FPosition write FPosition;
+    end;
 
   { TWCRESTWebCamStreamFrame }
 
@@ -90,6 +90,7 @@ type
     function TopChunk : TWCRESTWebCamStreamChunk;
     procedure PushFrame(aStartAt : Int64);
     procedure TryConsumeFrames;
+    procedure ClearOld(obj : TObject; data : Pointer);
   public
     constructor Create(aRef : TWCHTTP2Stream; aSID : Cardinal;
                             const aSubProtocol : String; aDelta : Integer);
@@ -395,10 +396,10 @@ end;
 procedure TWCRESTWebCamStream.PushFrame(aStartAt : Int64);
 begin
   if FFrames.Count > 10 then
-    FFrames.CleanDead;
+    DoIdle;
 
-  if Assigned(FActiveFrame) then
-    FActiveFrame.DecReference;
+  {if Assigned(FActiveFrame) then
+    FActiveFrame.DecReference;  }
   Lock;
   try
     Inc(FFrameID);
@@ -581,8 +582,16 @@ begin
   end;
 end;
 
+procedure TWCRESTWebCamStream.ClearOld(obj : TObject; data : Pointer);
+begin
+  if (Int64(PQWord(data)^) - Int64(TWCRESTWebCamStreamFrame(obj).FrameID)) > 10 then
+    TWCRESTWebCamStreamFrame(obj).DecReference;
+end;
+
 procedure TWCRESTWebCamStream.DoIdle;
 begin
+  if Assigned(FActiveFrame) then
+    FFrames.DoForAllEx(@ClearOld, @FFrameID);
   FFrames.CleanDead;
 end;
 

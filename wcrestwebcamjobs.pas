@@ -724,7 +724,7 @@ begin
                                                  @Res) = erOkWithData then
       begin
         jsonObj := TJSONObject.Create([cDEVICE,VarToStr(Res[0]),
-                                       cREC,   VarToStr(Res[1]),
+                                       cMETA,  VarToStr(Res[1]),
                                        cSTAMP, VarToStr(Res[2]),
                                        cRESULT, cOK]);
         try
@@ -1776,7 +1776,15 @@ begin
           begin
             //send new data
             SendResponse;
+
+            if (aFrame.FrameID > (FLastFrameId + 1)) then
+            begin
+              aDelta := aDelta div 2;
+              // possible data lost
+            end;
+
             FLastFrameId := aFrame.FrameID;
+
             aFrame.DecReference;
             RestartJob(aDelta, GetTickCount64);
           end else
