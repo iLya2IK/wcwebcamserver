@@ -185,6 +185,7 @@ type
 const ERR_WEBCAM_STREAM_BUFFER_OVERFLOW = 1;
       ERR_WEBCAM_STREAM_WRONG_HEADER = 2;
       ERR_WEBCAM_STREAM_FRAME_TO_BIG = 3;
+      ERR_WEBCAM_STREAM_TERMINATED = 4;
       WEBCAM_FRAME_HEADER_SIZE  = Sizeof(Word) + Sizeof(Cardinal);
       WEBCAM_FRAME_START_SEQ : Word = $aaaa;
 
@@ -302,7 +303,7 @@ begin
   try
     Result := FindStream(aSID);
     if not assigned(Result) then
-      Result := WebCamStreams.Streams.AddStream(aRef, aSID, aSubProtocol, aDelta);
+       Result := WebCamStreams.Streams.AddStream(aRef, aSID, aSubProtocol, aDelta);
   finally
     WebCamStreams.Streams.UnLock;
   end;
@@ -625,6 +626,7 @@ end;
 
 procedure TWCRESTWebCamStreams.AfterStrmExtract(aStrm : TObject);
 begin
+  TWCRESTWebCamStream(aStrm).DoError(ERR_WEBCAM_STREAM_TERMINATED);
   RemoveStreamFromTable(TWCRESTWebCamStream(aStrm).Key);
 end;
 
@@ -650,7 +652,8 @@ end;
 
 procedure TWCRESTWebCamStreams.FillSSIDMap(obj : TObject; data : Pointer);
 begin
-   TFastMapUInt(data).AddKeySorted(TWCRESTWebCamStream(obj).Key, 0);
+  if not IsStrmClosed(obj, nil) then
+     TFastMapUInt(data).AddKeySorted(TWCRESTWebCamStream(obj).Key, 0);
 end;
 
 function TWCRESTWebCamStreams.RemoveStreamFromTable(aKey : Cardinal
