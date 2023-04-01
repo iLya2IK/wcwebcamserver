@@ -1212,11 +1212,10 @@ begin
                                             'from sessions where cid == ?1 and '+
                                             'device == ?2 '+
                                             'order by id desc limit 1;');
-    PREP_GetSessions := FUsersDB.AddNewPrep('select * from (select id, cid, device '+
-                                            'from sessions order by id desc) '+
+    PREP_GetSessions := FUsersDB.AddNewPrep('select max(id),cid,device from sessions '+
                                             'group by cid, device;');
-    PREP_GetSessionsByCID := FUsersDB.AddNewPrep('select * from (select id, device '+
-                                            'from sessions where cid == ? order by id desc) '+
+    PREP_GetSessionsByCID := FUsersDB.AddNewPrep('select max(id),device from sessions '+
+                                            'where cid == ?1 '+
                                             'group by device;');
 
     PREP_AddRecord := FUsersDB.AddNewPrep('INSERT INTO records '+
