@@ -395,20 +395,19 @@ end;
 function AddClient(const Name, Passw, aDevice, aMeta, aIP : String) : String;
 var
   jsonObj : TJSONObject;
-  cid : integer;
+  cid : Array [0..0] of Variant;
 begin
   try
     if assigned(vUsersDB.PREP_ReturnLastHsh) then
     begin
-      cid := 0;
+      cid[0] := 0;
       vUsersDB.PREP_ReturnLastHsh.Lock;
       try
         if vUsersDB.PREP_GetClient.ExecToValue([Name, Passw],
-                                               @cid,
-                                               sizeof(cid)) = erOkWithData then
+                                               @cid) = erOkWithData then
         begin
-          vUsersDB.PREP_AddClient.Execute([cid, aDevice, aMeta, aIP]);
-          Result := vUsersDB.PREP_ReturnLastHsh.QuickQuery([cid, aDevice], nil, false);
+          vUsersDB.PREP_AddClient.Execute([cid[0], aDevice, aMeta, aIP]);
+          Result := vUsersDB.PREP_ReturnLastHsh.QuickQuery([cid[0], aDevice], nil, false);
         end else
           Exit(BAD_JSON_NO_SUCH_USER);
       finally
@@ -1189,11 +1188,11 @@ begin
       PREP_ReturnLastHsh := nil;
     end else begin
       PREP_AddClient := FUsersDB.AddNewPrep(
-                          'INSERT INTO sessions (cid, device, metadata, ip) '+
+                          'INSERT OR IGNORE INTO sessions (cid, device, metadata, ip) '+
                           'values (?1, ?2, ?3, ?4);');
       PREP_ReturnLastHsh := FUsersDB.AddNewPrep(
                           'SELECT shash from sessions where cid == ?1 and '+
-                          'device == ?2 order by stamp desc limit 1;');
+                          'device == ?2 order by id desc limit 1;');
     end;
     PREP_AddMsg := FUsersDB.AddNewPrep('INSERT INTO msgs '+
                                        '(cid, msg, device, target, params) '+
@@ -1212,12 +1211,12 @@ begin
     PREP_GetSessionByDevice := FUsersDB.AddNewPrep('select id '+
                                             'from sessions where cid == ?1 and '+
                                             'device == ?2 '+
-                                            'order by stamp desc limit 1;');
+                                            'order by id desc limit 1;');
     PREP_GetSessions := FUsersDB.AddNewPrep('select * from (select id, cid, device '+
-                                            'from sessions order by stamp desc) '+
+                                            'from sessions order by id desc) '+
                                             'group by cid, device;');
     PREP_GetSessionsByCID := FUsersDB.AddNewPrep('select * from (select id, device '+
-                                            'from sessions where cid == ? order by stamp desc) '+
+                                            'from sessions where cid == ? order by id desc) '+
                                             'group by device;');
 
     PREP_AddRecord := FUsersDB.AddNewPrep('INSERT INTO records '+
