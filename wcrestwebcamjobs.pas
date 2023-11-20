@@ -190,6 +190,7 @@ type
     PREP_MaintainStep5,
     PREP_MaintainStep6,
     PREP_MaintainStep7,
+//    PREP_MaintainStep8,
 
     PREP_ConfSetFloat,
     PREP_ConfSetText,
@@ -1341,15 +1342,27 @@ begin
     // delete old messages every 1 hr
     //  max lifetime of all msgs is 30 days (except sync messages)
     //  sync messages are live forever
-    PREP_MaintainStep7 := FUsersDB.AddNewPrep('delete from msgs  '+
+    PREP_MaintainStep7 := FUsersDB.AddNewPrep(
+                                              'with sync_table as (select id, cid, device, max(stamp) from msgs where (msg == ''sync'') group by cid, device) ' +
+                                              'delete from msgs  '+
 //                                              '(msg!=''sync'') and '+
 //                                              '((julianday(current_timestamp) - julianday(stamp)) > 30.0);');
                                               'where id in '+
                                               '(select id from msgs as r1 left join confs '+
                                               'on confs.cid == r1.cid and confs.kind == 6 '+
                                               'inner join conf_set on conf_set.knd == 6 '+
-                                              'where (msg!=''sync'') and (julianday(current_timestamp) - julianday(r1.stamp)) > '+
+                                              'where (id not in (select sync_table.id from sync_table)) and (julianday(current_timestamp) - julianday(r1.stamp)) > '+
                                                    'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
+
+{    PREP_MaintainStep8 := FUsersDB.AddNewPrep(
+                                              'with sync_table as (select id, cid, max(stamp) from msgs order by stamp desc group by id, cid) ' +
+                                              'delete from msgs  '+
+                                              'where id in '+
+                                              '(select id from msgs as r1 left join confs '+
+                                              'on confs.cid == r1.cid and confs.kind == 6 '+
+                                              'inner join conf_set on conf_set.knd == 6 '+
+                                              'where (id not in (select sync_table.id from sync_table)) and (julianday(current_timestamp) - julianday(r1.stamp)) > '+
+                                                   'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');}
 
 
     PREP_UpdateSession := FUsersDB.AddNewPrep('update sessions '+
@@ -1413,6 +1426,7 @@ procedure TRESTWebCamUsersDB.MaintainStep1hr;
 begin
   PREP_MaintainStep1.Execute;
   PREP_MaintainStep7.Execute;
+//  PREP_MaintainStep8.Execute;
 end;
 
 procedure TRESTWebCamUsersDB.CheckSSIDs(ids : TFastMapUInt);
