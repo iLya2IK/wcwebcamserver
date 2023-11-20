@@ -1165,12 +1165,14 @@ begin
        'mav real default 0.0,'+
        'dv real default 0.0);');
 
-    MAX_ALLOWED_CONFIG_KIND := 4;
+    MAX_ALLOWED_CONFIG_KIND := 6;
     FUsersDB.ExecuteDirect('insert or ignore into conf_set (knd, descr, miv, mav, dv) values '+
                            '(1, ''old records timeout (days)'', 0.004, 168.0, 30.0), '+
                            '(2, ''dead sessions timeout (minutes)'', 3, 30, 10), '+
                            '(3, ''max requests for session'', 200, 10000, 1500), '+
-                           '(4, ''max reqs per min for session'', 20, 200, 50);');
+                           '(4, ''max reqs per min for session'', 20, 200, 50), '+
+                           '(5, ''broadcasts lifetime (hr)'', 1, 750, 125),'+
+                           '(6, ''overall messages lifetime (days)'', 1, 120, 30);');
 
     PREP_GetClient := FUsersDB.AddNewPrep(
                           'SELECT id FROM clients WHERE name == ?1 and pass == ?2;');
@@ -1327,15 +1329,27 @@ begin
                                               'where (syncs.stmp - julianday(msgs.stamp)) > 0.003);');
     // delete old broadcast messages every 60 sec
     //  max lifetime of all broarcast msgs is only 1hr
-    PREP_MaintainStep6 := FUsersDB.AddNewPrep('delete from msgs where '+
-                                              '(target == '''') and (msg!=''sync'') and '+
-                                              '((julianday(current_timestamp) - julianday(stamp)) > 0.04);');
+    PREP_MaintainStep6 := FUsersDB.AddNewPrep('delete from msgs  '+
+//                                              ' where (target == '''') and (msg!=''sync'') and '+
+//                                              '((julianday(current_timestamp) - julianday(stamp)) > ' + //0.04);');
+                                              'where id in '+
+                                              '(select id from msgs as r1 left join confs '+
+                                              'on confs.cid == r1.cid and confs.kind == 5 '+
+                                              'inner join conf_set on conf_set.knd == 5 '+
+                                              'where (target == '''') and (msg!=''sync'') and (julianday(current_timestamp) - julianday(r1.stamp)) > '+
+                                                   'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav) * 0.04);');
     // delete old messages every 1 hr
     //  max lifetime of all msgs is 30 days (except sync messages)
     //  sync messages are live forever
-    PREP_MaintainStep7 := FUsersDB.AddNewPrep('delete from msgs where '+
-                                              '(msg!=''sync'') and '+
-                                              '((julianday(current_timestamp) - julianday(stamp)) > 30.0);');
+    PREP_MaintainStep7 := FUsersDB.AddNewPrep('delete from msgs  '+
+//                                              '(msg!=''sync'') and '+
+//                                              '((julianday(current_timestamp) - julianday(stamp)) > 30.0);');
+                                              'where id in '+
+                                              '(select id from msgs as r1 left join confs '+
+                                              'on confs.cid == r1.cid and confs.kind == 6 '+
+                                              'inner join conf_set on conf_set.knd == 6 '+
+                                              'where (msg!=''sync'') and (julianday(current_timestamp) - julianday(r1.stamp)) > '+
+                                                   'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
 
 
     PREP_UpdateSession := FUsersDB.AddNewPrep('update sessions '+
