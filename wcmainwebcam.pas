@@ -49,6 +49,7 @@ begin
   WCJobsTree.Values['/getConfig.json']        := TWCGetConfig;
   WCJobsTree.Values['/setConfig.json']        := TWCSetConfig;
   WCJobsTree.Values['/heartBit.json']         := TWCHeartBit;
+  WCJobsTree.Values['/getServerTime.json']    := TWCGetServerTime;
 end;
 
 procedure DisposeJobsTree;

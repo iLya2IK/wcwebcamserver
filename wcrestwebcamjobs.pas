@@ -127,6 +127,13 @@ type
     procedure Execute; override;
   end;
 
+  { TWCGetServerTime }
+
+  TWCGetServerTime = class(TWCMainClientJob)
+  public
+    procedure Execute; override;
+  end;
+
   { TWCRawInputStream }
 
   TWCRawInputStream = class(TWCMainClientJob)
@@ -195,6 +202,8 @@ type
     PREP_ConfSetFloat,
     PREP_ConfSetText,
     PREP_GetConf,
+
+    PREP_GetCurrentTimeStamp,
 
     PREP_UpdateSession: TSqlite3Prepared;
     constructor Create;
@@ -387,6 +396,29 @@ begin
       Result := OK_JSON
     else
       Result := BAD_JSON_NO_SUCH_SESSION;
+  except
+    on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
+    else Result := BAD_JSON_INTERNAL_UNK;
+  end;
+end;
+
+function ServerTime(const sIP, sHash : String) : String;
+var
+  jsonObj : TJSONObject;
+begin
+  try
+    Result := vUsersDB.PREP_GetCurrentTimeStamp.QuickQuery([], nil, false);
+
+    if Length(Result) > 0 then
+    begin
+      jsonObj := TJSONObject.Create([cSTAMP,  Result,
+                                     cRESULT, cOK]);
+      try
+        Result := jsonObj.AsJSON;
+      finally
+        jsonObj.Free;
+      end;
+    end else Result := BAD_JSON_NO_SUCH_USER;
   except
     on e : EDatabaseError do Result := BAD_JSON_DATABASE_FAIL;
     else Result := BAD_JSON_INTERNAL_UNK;
@@ -1175,6 +1207,8 @@ begin
                            '(5, ''broadcasts lifetime (hr)'', 1, 750, 125),'+
                            '(6, ''overall messages lifetime (days)'', 1, 120, 30);');
 
+    PREP_GetCurrentTimeStamp := FUsersDB.AddNewPrep('select current_timestamp;');
+
     PREP_GetClient := FUsersDB.AddNewPrep(
                           'SELECT id FROM clients WHERE name == ?1 and pass == ?2;');
     PREP_GetListOfDevices := FUsersDB.AddNewPrep(
@@ -1463,6 +1497,17 @@ begin
   if DecodeParamsWithDefault(Request.QueryFields, [cSHASH],
                              Request.Content, Params, ['']) then
     Response.Content := HeartBit(Request.RemoteAddress, Params[0]) else
+    Response.Content := BAD_JSON_MALFORMED_REQUEST;
+  inherited Execute;
+end;
+
+{ TWCGetServerTime }
+
+procedure TWCGetServerTime.Execute;
+begin
+  if DecodeParamsWithDefault(Request.QueryFields, [cSHASH],
+                             Request.Content, Params, ['']) then
+    Response.Content := ServerTime(Request.RemoteAddress, Params[0]) else
     Response.Content := BAD_JSON_MALFORMED_REQUEST;
   inherited Execute;
 end;
