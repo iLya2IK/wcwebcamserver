@@ -1239,11 +1239,11 @@ begin
     //
     PREP_GetRecordCount := FUsersDB.AddNewPrep('Select * from (SELECT id, device, stamp FROM '+
                                                'records where (cid == ?1) and (stamp > ?2) '+
-                                               'order by stamp desc limit 32) order by stamp asc;');
+                                               'order by stamp asc limit 32) order by stamp asc;');
     PREP_GetMsgs        := FUsersDB.AddNewPrep('Select * from (SELECT msg, device, params, stamp FROM '+
                                                'msgs where (cid == ?1) and (stamp > ?2) and '+
                                                '(target in (?3, '''' )) and (device != ?3) and (msg!=''sync'')'+
-                                               'order by stamp desc limit 32) order by stamp asc;');
+                                               'order by stamp asc limit 32) order by stamp asc;');
     //
 
     {PREP_ConfSetFloat := FUsersDB.AddNewPrep('WITH new (cid, kind, fv, sv) AS ( VALUES(?1, ?2, ?3) ) '+
