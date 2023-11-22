@@ -1393,7 +1393,7 @@ begin
                                               'msgs where (msg == ''sync'') group by cid, device) ' +
                                               'delete from msgs where '+
                                               '(msg == ''sync'') and (id not in (select sync_table.id from sync_table)) and '+
-                                              '(julianday(current_timestamp) - julianday(r1.stamp)) > 0.04;');
+                                              '(julianday(current_timestamp) - julianday(stamp)) > 0.04;');
 
 
     PREP_UpdateSession := FUsersDB.AddNewPrep('update sessions '+
