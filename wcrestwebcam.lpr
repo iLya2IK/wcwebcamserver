@@ -38,6 +38,7 @@ uses
   wcapplication,
   fphttp,
   http2consts,
+  fpjson,
   wcconfig,
   wcNetworking,
   SortedThreadPool,
@@ -50,12 +51,40 @@ uses
 {$linklib libc}
 {$endif}
 
+type
+
+{ TWCJSONFloatNumber }
+
+TWCJSONFloatNumber = class(TJSONFloatNumber)
+public
+  function GetAsString: TJSONStringType; override;
+end;
+
 var Conf : TWCConfig;
+
+{ TWCJSONFloatNumber }
+
+function TWCJSONFloatNumber.GetAsString : TJSONStringType;
+var
+  test, v : Extended;
+  c : Integer;
+begin
+  v := GetAsFloat;
+  Result := Format('%.15g', [GetAsFloat]);
+  Val(Result, test, C);
+  if (C = 0) and (test <> v) then
+  begin
+    Result := Format('%.17g', [GetAsFloat]);
+  end;
+end;
+
 {$IFDEF LOAD_DYNAMICALLY}
 vLibPath : String;
 {$ENDIF}
 begin
   Randomize;
+
+  SetJSONInstanceType(jitNumberFloat, TWCJSONFloatNumber);
 
   Application.RegisterProtocolHelper(wcHTTP2, THTTP2WebCamServerHelper);
   Application.AddHelper(TRESTJsonConfigInitHelper.Create);
