@@ -13,8 +13,8 @@ uses
   Classes, SysUtils, variants,
   httpdefs, httpprotocol,
   jsonscanner, jsonparser, fpjson,
-  OGLFastNumList,
-  ExtSqlite3DS,
+  OGLFastNumList, ECommonObjs,
+  ExtSqlite3DS, ExtSqlite3Funcs,
   db,
   wcApplication, wcHTTP2Con, HTTP2Consts, wcNetworking;
 
@@ -229,6 +229,26 @@ type
     procedure ScalarFunc(argc : integer); override;
   end;
 
+
+  { TServerCurrentTimeStamp }
+
+  TServerCurrentTimeStamp = class(TSqlite3Function)
+  private
+    FAutoInc : TThreadSafeAutoIncrementCardinal;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure ScalarFunc(argc : integer); override;
+  end;
+
+  { TServerTSToSqliteTS }
+
+  TServerTSToSqliteTS = class(TSqlite3Function)
+  public
+    constructor Create;
+    procedure ScalarFunc(argc : integer); override;
+  end;
+
   TDeviceId = record
     cid, sid : TDBID;
     device : String;
@@ -241,7 +261,7 @@ const
 implementation
 
 uses wcutils, WCRESTWebCamAppHelper, sha1, base64, ExtSqliteUtils,
-  WCRESTWebCamStreams;
+  WCRESTWebCamStreams, LazSysUtils;
 
 const ERR_NO_ERROR          = 0;
       ERR_UNSPECIFIED       = 1;
@@ -310,6 +330,7 @@ const BAD_JSON = '{"result":"BAD","code":1}';
 
 var MAX_ALLOWED_CONFIG_KIND : integer;
 var vUsersDB : TRESTWebCamUsersDB = nil;
+var vServerDateTimeFormat : TFormatSettings;
 
 function GenSessionHash(const aKey: AnsiString): AnsiString;
 var
@@ -1124,6 +1145,49 @@ begin
   end;
 end;
 
+{ TServerTSToSqliteTS }
+
+constructor TServerTSToSqliteTS.Create;
+begin
+  inherited Create('sts_to_ts', 1, sqlteUtf8, sqlfScalar, true);
+end;
+
+procedure TServerTSToSqliteTS.ScalarFunc(argc : integer);
+var
+  S : String;
+begin
+  S := Copy(AsString(0), 1, 19);
+  SetResult(S);
+end;
+
+{ TServerCurrentTimeStamp }
+
+constructor TServerCurrentTimeStamp.Create;
+begin
+  inherited Create('servertimestamp', 0, sqlteUtf8, sqlfScalar, true);
+  FAutoInc := TThreadSafeAutoIncrementCardinal.Create;
+end;
+
+destructor TServerCurrentTimeStamp.Destroy;
+begin
+  FAutoInc.Free;
+  inherited Destroy;
+end;
+
+procedure TServerCurrentTimeStamp.ScalarFunc(argc : integer);
+var
+  V : Cardinal;
+  S, C : String;
+begin
+  V := FAutoInc.ID;
+  DateTimeToString(s, 'yyyy-mm-dd hh:nn:ss', NowUTC, []);
+  S := S + '.0000';
+  C := InttoStr(V mod 10000);
+  Move(C[1], S[25 - Length(C)], Length(C));
+
+  SetResult(S);
+end;
+
 { TSessionHashFunc }
 
 constructor TSessionHashFunc.Create;
@@ -1151,6 +1215,8 @@ begin
   try
     FUsersDB.FileName := Application.SitePath + TRESTJsonConfigHelper.Config.UsersDB;
     FUsersDB.AddFunction(TSessionHashFunc.Create);
+    FUsersDB.AddFunction(TServerCurrentTimeStamp.Create);
+    FUsersDB.AddFunction(TServerTSToSqliteTS.Create);
     FUsersDB.ExecSQL(
     'create table if not exists clients'+
       '(id integer primary key autoincrement, '+
@@ -1174,7 +1240,7 @@ begin
        'device text,'+
        'metadata text,'+
        'data blob,'+
-       'stamp text default current_timestamp);');
+       'stamp text default servertimestamp);');
     FUsersDB.ExecSQL(
     'create table if not exists msgs'+
       '(id integer primary key autoincrement, '+
@@ -1183,7 +1249,7 @@ begin
        'device text,'+
        'target text,'+
        'params text,'+
-       'stamp text default current_timestamp);');
+       'stamp text default servertimestamp);');
     FUsersDB.ExecSQL(
     'create table if not exists confs'+
       '(cid integer references clients(id) on delete cascade,'+
@@ -1232,11 +1298,11 @@ begin
                           'device == ?2 order by id desc limit 1;');
     end;
     PREP_AddMsg := FUsersDB.AddNewPrep('INSERT INTO msgs '+
-                                       '(cid, msg, device, target, params) '+
-                                       'values (?1, ?2, ?3, ?4, ?5);');
+                                       '(cid, msg, device, target, params, stamp) '+
+                                       'values (?1, ?2, ?3, ?4, ?5, servertimestamp());');
     PREP_AddSync := FUsersDB.AddNewPrep('INSERT INTO msgs '+
-                                       '(cid, msg, device, target, params) '+
-                                       'values (?1, ''sync'', ?2, '''', '''');');
+                                       '(cid, msg, device, target, params, stamp) '+
+                                       'values (?1, ''sync'', ?2, '''', '''', servertimestamp());');
     PREP_GetLastSync := FUsersDB.AddNewPrep('select stamp from msgs '+
                                             'where (cid == ?1) and '+
                                             '(device == ?2) and '+
@@ -1256,8 +1322,8 @@ begin
                                             'group by device;');
 
     PREP_AddRecord := FUsersDB.AddNewPrep('INSERT INTO records '+
-                                          '(cid, device, metadata, data) '+
-                                          'values (?1, ?2, ?3, ?4);');
+                                          '(cid, device, metadata, data, stamp) '+
+                                          'values (?1, ?2, ?3, ?4, servertimestamp());');
 
     // important to send both params:
     //   ?1 - client id, ?2 - record/msg id
@@ -1310,7 +1376,7 @@ begin
                                               '(select id from records as r1 left join confs '+
                                               'on confs.cid == r1.cid and confs.kind == 1 '+
                                               'inner join conf_set on conf_set.knd == 1 '+
-                                              'where (julianday(current_timestamp) - julianday(r1.stamp)) > '+
+                                              'where (julianday(current_timestamp) - julianday(sts_to_ts(r1.stamp))) > '+
                                                     'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
 
     // cleanup 'dead' sessions (conf.kind = 2) - launching every 10s
@@ -1354,24 +1420,24 @@ begin
 
     // delete read messages every 10 sec
     PREP_MaintainStep5 := FUsersDB.AddNewPrep('with syncs (stmp, cid, dev) as '+
-                                              '(select max(julianday(stamp)), cid, device from '+
+                                              '(select max(julianday(sts_to_ts(stamp))), cid, device from '+
                                               ' msgs where msg==''sync'' group by cid, device) '+
                                               'delete from msgs where msgs.id in (select id from msgs '+
                                               'inner join syncs on '+
                                               '(msgs.cid = syncs.cid) and '+
                                               '((msgs.target = syncs.dev) or '+
                                               ' ((msgs.device = syncs.dev) and (msgs.msg==''sync''))) '+
-                                              'where (syncs.stmp - julianday(msgs.stamp)) > 0.003);');
+                                              'where (syncs.stmp - julianday(sts_to_ts(msgs.stamp))) > 0.003);');
     // delete old broadcast messages every 60 sec
     //  max lifetime of all broarcast msgs is only 1hr
     PREP_MaintainStep6 := FUsersDB.AddNewPrep('delete from msgs  '+
 //                                              ' where (target == '''') and (msg!=''sync'') and '+
-//                                              '((julianday(current_timestamp) - julianday(stamp)) > ' + //0.04);');
+//                                              '((julianday(current_timestamp) - stsjulianday(stamp)) > ' + //0.04);');
                                               'where id in '+
                                               '(select id from msgs as r1 left join confs '+
                                               'on confs.cid == r1.cid and confs.kind == 5 '+
                                               'inner join conf_set on conf_set.knd == 5 '+
-                                              'where (target == '''') and (msg!=''sync'') and (julianday(current_timestamp) - julianday(r1.stamp)) > '+
+                                              'where (target == '''') and (msg!=''sync'') and (julianday(current_timestamp) - julianday(sts_to_ts(r1.stamp))) > '+
                                                    'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav) * 0.04);');
     // delete old messages every 1 hr
     //  max lifetime of all msgs is 30 days (except sync messages)
@@ -1380,12 +1446,12 @@ begin
                                               'with sync_table as (select id, cid, device, max(stamp) from msgs where (msg == ''sync'') group by cid, device) ' +
                                               'delete from msgs  '+
 //                                              '(msg!=''sync'') and '+
-//                                              '((julianday(current_timestamp) - julianday(stamp)) > 30.0);');
+//                                              '((julianday(current_timestamp) - stsjulianday(stamp)) > 30.0);');
                                               'where id in '+
                                               '(select id from msgs as r1 left join confs '+
                                               'on confs.cid == r1.cid and confs.kind == 6 '+
                                               'inner join conf_set on conf_set.knd == 6 '+
-                                              'where (id not in (select sync_table.id from sync_table)) and (julianday(current_timestamp) - julianday(r1.stamp)) > '+
+                                              'where (id not in (select sync_table.id from sync_table)) and (julianday(current_timestamp) - julianday(sts_to_ts(r1.stamp))) > '+
                                                    'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
 
     PREP_MaintainStep8 := FUsersDB.AddNewPrep(
@@ -1393,7 +1459,7 @@ begin
                                               'msgs where (msg == ''sync'') group by cid, device) ' +
                                               'delete from msgs where '+
                                               '(msg == ''sync'') and (id not in (select sync_table.id from sync_table)) and '+
-                                              '(julianday(current_timestamp) - julianday(stamp)) > 0.04;');
+                                              '(julianday(current_timestamp) - julianday(sts_to_ts(stamp))) > 0.04;');
 
 
     PREP_UpdateSession := FUsersDB.AddNewPrep('update sessions '+
@@ -1884,6 +1950,8 @@ end;
 
 initialization
   TJSONData.CompressedJSON := true;
-
+  vServerDateTimeFormat := DefaultFormatSettings;
+  vServerDateTimeFormat.LongDateFormat:= 'dd.mm.yy';
+  vServerDateTimeFormat.LongTimeFormat:= 'hh:nn:ss';
 end.
 
