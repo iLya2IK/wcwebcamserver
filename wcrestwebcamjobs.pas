@@ -197,7 +197,7 @@ type
     PREP_MaintainStep5,
     PREP_MaintainStep6,
     PREP_MaintainStep7,
-    PREP_MaintainStep8,
+//    PREP_MaintainStep8,
 
     PREP_ConfSetFloat,
     PREP_ConfSetText,
@@ -1093,7 +1093,10 @@ begin
     accid := GetClientId(sIP, sHash);
     if accid.cid > 0 then
     begin
-      vUsersDB.PREP_AddMsg.Execute([accid.cid, sMsg, accid.device, aTarget, aParams]);
+      if SameText(sMsg, cSYNC) then
+        vUsersDB.PREP_AddSync.Execute([accid.cid, accid.device])
+      else
+        vUsersDB.PREP_AddMsg.Execute([accid.cid, sMsg, accid.device, aTarget, aParams]);
       Result := OK_JSON;
     end else
       Result := BAD_JSON_NO_SUCH_SESSION;
@@ -1131,7 +1134,10 @@ begin
             aParams := jField.AsJSON;
           end else
             aParams := JSON_EMPTY_OBJ;
-          vUsersDB.PREP_AddMsg.Execute([accid.cid, sMsg, accid.device, aTarget, aParams]);
+          if SameText(sMsg, cSYNC) then
+            vUsersDB.PREP_AddSync.Execute([accid.cid, accid.device])
+          else
+            vUsersDB.PREP_AddMsg.Execute([accid.cid, sMsg, accid.device, aTarget, aParams]);
         end;
       end;
       Result := OK_JSON;
@@ -1250,6 +1256,23 @@ begin
        'target text,'+
        'params text,'+
        'stamp text default servertimestamp);');
+    // since 18.02.24 *BEGIN*
+    FUsersDB.ExecSQL(
+    'create table if not exists syncs'+
+      '(cid integer references clients(id) on delete cascade,'+
+       'device text,'+
+       'stamp text default servertimestamp);');
+    FUsersDB.ExecSQL(
+    'create unique index if not exists syncs_index on syncs (cid, device);'
+    );
+    FUsersDB.ExecSQL(
+    'insert or ignore into syncs (cid, device, stamp) '+
+    'select cid, device, max(stamp) from msgs where msg == ''sync'' group by cid, device;'
+    );
+    FUsersDB.ExecSQL(
+    'delete from msgs where msg == ''sync'';'
+    );
+    // since 18.02.24 *END*
     FUsersDB.ExecSQL(
     'create table if not exists confs'+
       '(cid integer references clients(id) on delete cascade,'+
@@ -1300,14 +1323,20 @@ begin
     PREP_AddMsg := FUsersDB.AddNewPrep('INSERT INTO msgs '+
                                        '(cid, msg, device, target, params, stamp) '+
                                        'values (?1, ?2, ?3, ?4, ?5, servertimestamp());');
-    PREP_AddSync := FUsersDB.AddNewPrep('INSERT INTO msgs '+
+    PREP_AddSync := FUsersDB.AddNewPrep('INSERT OR REPLACE INTO syncs '+
+                                       '(cid, device, stamp) '+
+                                       'VALUES (?1, ?2, servertimestamp());');
+    {PREP_AddSync := FUsersDB.AddNewPrep('INSERT INTO msgs '+
                                        '(cid, msg, device, target, params, stamp) '+
-                                       'values (?1, ''sync'', ?2, '''', '''', servertimestamp());');
-    PREP_GetLastSync := FUsersDB.AddNewPrep('select stamp from msgs '+
+                                       'values (?1, ''sync'', ?2, '''', '''', servertimestamp());');}
+    PREP_GetLastSync := FUsersDB.AddNewPrep('select stamp from syncs '+
+                                            'where (cid == ?1) and '+
+                                                  '(device == ?2);');
+    {PREP_GetLastSync := FUsersDB.AddNewPrep('select stamp from msgs '+
                                             'where (cid == ?1) and '+
                                             '(device == ?2) and '+
                                             '(msg == ''sync'') '+
-                                            'order by stamp desc limit 1;');
+                                            'order by stamp desc limit 1;'); }
     PREP_GetClientByHash := FUsersDB.AddNewPrep('select id, cid, device '+
                                             'from sessions where shash == ?1 and ip == ?2 '+
                                             'limit 1;');
@@ -1342,7 +1371,7 @@ begin
                                                'order by stamp asc limit 32) order by stamp asc;');
     PREP_GetMsgs        := FUsersDB.AddNewPrep('Select * from (SELECT msg, device, params, stamp FROM '+
                                                'msgs where (cid == ?1) and (stamp > ?2) and '+
-                                               '(target in (?3, '''' )) and (device != ?3) and (msg!=''sync'')'+
+                                               '(target in (?3, '''' )) and (device != ?3) '+ //and (msg!=''sync'')'+
                                                'order by stamp asc limit 32) order by stamp asc;');
     //
 
@@ -1419,18 +1448,23 @@ begin
     PREP_MaintainStepUpdate4 := FUsersDB.AddNewPrep('update sessions set req_permin = 0;');
 
     // delete read messages every 10 sec
-    PREP_MaintainStep5 := FUsersDB.AddNewPrep('with syncs (stmp, cid, dev) as '+
+{    PREP_MaintainStep5 := FUsersDB.AddNewPrep('with syncs (stmp, cid, dev) as '+
                                               '(select max(julianday(sts_to_ts(stamp))), cid, device from '+
                                               ' msgs where msg==''sync'' group by cid, device) '+
                                               'delete from msgs where msgs.id in (select id from msgs '+
                                               'inner join syncs on '+
                                               '(msgs.cid = syncs.cid) and '+
-                                              '((msgs.target = syncs.dev) or '+
-                                              ' ((msgs.device = syncs.dev) and (msgs.msg==''sync''))) '+
-                                              'where (syncs.stmp - julianday(sts_to_ts(msgs.stamp))) > 0.003);');
+                                              '((msgs.target = syncs.device) or '+
+                                              ' (msgs.device = syncs.device) and (msgs.msg==''sync''))) '+
+                                              'where (julianday(sts_to_ts(syncs.stamp)) - julianday(sts_to_ts(msgs.stamp))) > 0.003);');}
+    PREP_MaintainStep5 := FUsersDB.AddNewPrep('delete from msgs where msgs.id in (select id from msgs '+
+                                              'inner join syncs on '+
+                                              '(msgs.cid = syncs.cid) and '+
+                                              '(msgs.target = syncs.device) '+
+                                              'where (julianday(sts_to_ts(syncs.stamp)) - julianday(sts_to_ts(msgs.stamp))) > 0.003);');
     // delete old broadcast messages every 60 sec
-    //  max lifetime of all broarcast msgs is only 1hr
-    PREP_MaintainStep6 := FUsersDB.AddNewPrep('delete from msgs  '+
+    //  max lifetime of all broadcast msgs is from 1hr to 750hr
+{    PREP_MaintainStep6 := FUsersDB.AddNewPrep('delete from msgs  '+
 //                                              ' where (target == '''') and (msg!=''sync'') and '+
 //                                              '((julianday(current_timestamp) - stsjulianday(stamp)) > ' + //0.04);');
                                               'where id in '+
@@ -1438,10 +1472,17 @@ begin
                                               'on confs.cid == r1.cid and confs.kind == 5 '+
                                               'inner join conf_set on conf_set.knd == 5 '+
                                               'where (target == '''') and (msg!=''sync'') and (julianday(current_timestamp) - julianday(sts_to_ts(r1.stamp))) > '+
-                                                   'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav) * 0.04);');
+                                                   'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav) * 0.04);');}
+    PREP_MaintainStep6 := FUsersDB.AddNewPrep('delete from msgs  '+
+                                                  'where id in '+
+                                                  '(select id from msgs as r1 left join confs '+
+                                                  'on confs.cid == r1.cid and confs.kind == 5 '+
+                                                  'inner join conf_set on conf_set.knd == 5 '+
+                                                  'where (target == '''') and (julianday(current_timestamp) - julianday(sts_to_ts(r1.stamp))) > '+
+                                                       'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav) * 0.04);');
+
     // delete old messages every 1 hr
     //  max lifetime of all msgs is 30 days (except sync messages)
-    //  sync messages are live forever
     PREP_MaintainStep7 := FUsersDB.AddNewPrep(
                                               'with sync_table as (select id, cid, device, max(stamp) from msgs where (msg == ''sync'') group by cid, device) ' +
                                               'delete from msgs  '+
@@ -1453,14 +1494,21 @@ begin
                                               'inner join conf_set on conf_set.knd == 6 '+
                                               'where (id not in (select sync_table.id from sync_table)) and (julianday(current_timestamp) - julianday(sts_to_ts(r1.stamp))) > '+
                                                    'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
+    PREP_MaintainStep7 := FUsersDB.AddNewPrep(
+                                              'delete from msgs  '+
+                                              'where id in '+
+                                              '(select id from msgs as r1 left join confs '+
+                                              'on confs.cid == r1.cid and confs.kind == 6 '+
+                                              'inner join conf_set on conf_set.knd == 6 '+
+                                              'where (julianday(current_timestamp) - julianday(sts_to_ts(r1.stamp))) > '+
+                                                       'min(max(ifnull(confs.fv, conf_set.dv), conf_set.miv), conf_set.mav));');
 
-    PREP_MaintainStep8 := FUsersDB.AddNewPrep(
+{    PREP_MaintainStep8 := FUsersDB.AddNewPrep(
                                               'with sync_table as (select id, cid, device, max(stamp) from '+
                                               'msgs where (msg == ''sync'') group by cid, device) ' +
                                               'delete from msgs where '+
                                               '(msg == ''sync'') and (id not in (select sync_table.id from sync_table)) and '+
-                                              '(julianday(current_timestamp) - julianday(sts_to_ts(stamp))) > 0.04;');
-
+                                              '(julianday(current_timestamp) - julianday(sts_to_ts(stamp))) > 0.04;');}
 
     PREP_UpdateSession := FUsersDB.AddNewPrep('update sessions '+
                                                       'set stamp = julianday(current_timestamp), '+
@@ -1523,7 +1571,7 @@ procedure TRESTWebCamUsersDB.MaintainStep1hr;
 begin
   PREP_MaintainStep1.Execute;
   PREP_MaintainStep7.Execute;
-  PREP_MaintainStep8.Execute;
+  //PREP_MaintainStep8.Execute;
 end;
 
 procedure TRESTWebCamUsersDB.CheckSSIDs(ids : TFastMapUInt);
