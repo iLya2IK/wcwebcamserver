@@ -42,6 +42,7 @@
           <Linking>
             <Debugging>
               <GenerateDebugInfo Value="False"/>
+              <DebugInfoType Value="dsDwarf2"/>
             </Debugging>
             <LinkSmart Value="True"/>
           </Linking>
@@ -154,7 +155,7 @@
     </Other>
   </CompilerOptions>
   <Debugging>
-    <Exceptions Count="5">
+    <Exceptions Count="6">
       <Item1>
         <Name Value="EAbort"/>
       </Item1>
@@ -170,6 +171,9 @@
       <Item5>
         <Name Value="ESSLIOError"/>
       </Item5>
+      <Item6>
+        <Name Value="ESocketError"/>
+      </Item6>
     </Exceptions>
   </Debugging>
 </CONFIG>

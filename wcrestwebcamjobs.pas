@@ -1773,6 +1773,8 @@ end;
 { TWCAddClient }
 
 procedure TWCAddClient.Execute;
+var
+  S : String;
 begin
   if DecodeParamsWithDefault(Request.QueryFields, [cNAME, cPASS, cDEVICE, cMETA],
                              Request.Content, Params, ['', '', '', JSON_EMPTY_OBJ]) then
@@ -1780,9 +1782,13 @@ begin
     if (Length(Params[0]) > 0) and
        (Length(Params[1]) > 0) and
        (Length(Params[2]) > 0) then
-      Response.Content := AddClient(Params[0], Params[1], Params[2], Params[3],
-                                               Request.RemoteAddress) else
+    begin
+      S :=  AddClient(Params[0], Params[1], Params[2], Params[3],
+                                               Request.RemoteAddress);
+      Response.Content := S;
+    end else begin
       Response.Content := BAD_JSON_MALFORMED_REQUEST;
+    end;
   end else Response.Content := BAD_JSON_MALFORMED_REQUEST;
   inherited Execute;
 end;
