@@ -37,7 +37,7 @@ type
 
   { TWCRESTWebCamStreamFrame }
 
-  TWCRESTWebCamStreamFrame = class(TNetReferencedObject)
+  TWCRESTWebCamStreamFrame = class(TNetAutoReferencedObject)
   private
     FFrameData : Pointer;
     FFrameSize : Integer;

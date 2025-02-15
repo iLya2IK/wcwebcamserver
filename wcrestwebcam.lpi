@@ -151,7 +151,8 @@
 -dSERVER_NOT_RPC_MODE
 -dWC_WEB_SOCKETS 
 -dDEBUG 
--dDEBUG_STAT"/>
+-dDEBUG_STAT
+-d_USE_GLOBAL_SSL_CONTEXT"/>
     </Other>
   </CompilerOptions>
   <Debugging>
