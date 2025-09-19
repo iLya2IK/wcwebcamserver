@@ -14,6 +14,10 @@ uses
   ECommonObjs, OGLFastNumList, extmemorystream, AvgLvlTree,
   wcHTTP2Con, wcApplication, HTTP2Consts;
 
+const
+  WEBCAM_FRAMES_BUFFER_SIZE = 16;
+  WEBCAM_FRAMES_BUFFER_MASK = $0F;
+
 type
 
     { TWCRESTWebCamStreamChunk }
@@ -37,7 +41,7 @@ type
 
   { TWCRESTWebCamStreamFrame }
 
-  TWCRESTWebCamStreamFrame = class(TNetReferencedObject)
+  TWCRESTWebCamStreamFrame = class(TNetAutoReferencedObject)
   private
     FFrameData : Pointer;
     FFrameSize : Integer;
@@ -53,13 +57,23 @@ type
 
   TWCRESTWebCamChunks = class(specialize TThreadSafeFastBaseSeq<TWCRESTWebCamStreamChunk>);
 
+  TFramesList = Array [0..WEBCAM_FRAMES_BUFFER_SIZE-1] of TWCRESTWebCamStreamFrame;
+
   { TWCRESTWebCamFrames }
 
-  TWCRESTWebCamFrames = class(TNetReferenceList)
+  TWCRESTWebCamFrames = class(TThreadSafeObject)
   private
-    function IsActual(obj : TObject; data : Pointer) : Boolean;
+    FCircularBuffer : TFramesList;
+    FWritePos : Integer;
+    function GetCount : Integer;
   public
+    constructor Create;
+    destructor Destroy; override;
+
+    procedure Add(aFrame : TWCRESTWebCamStreamFrame);
     function GetActualFrame(const lstFrame : QWord) : TWCRESTWebCamStreamFrame;
+
+    property Count: Integer read GetCount;
   end;
 
   TWCRESTWebCamFrameState = (fstWaitingStartOfFrame, fstWaitingData);
@@ -90,7 +104,6 @@ type
     function TopChunk : TWCRESTWebCamStreamChunk;
     procedure PushFrame(aStartAt : Int64);
     procedure TryConsumeFrames;
-    procedure ClearOld(obj : TObject; data : Pointer);
   public
     constructor Create(aRef : TWCHTTP2Stream; aSID : Cardinal;
                             const aSubProtocol : String; aDelta : Integer);
@@ -206,15 +219,90 @@ end;
 
 { TWCRESTWebCamFrames }
 
-function TWCRESTWebCamFrames.IsActual(obj : TObject; data : Pointer) : Boolean;
+function TWCRESTWebCamFrames.GetCount : Integer;
 begin
-  Result := TWCRESTWebCamStreamFrame(obj).FrameID > PQWord(data)^;
+  Result := WEBCAM_FRAMES_BUFFER_SIZE;
+end;
+
+constructor TWCRESTWebCamFrames.Create;
+var
+  i : integer;
+begin
+  inherited Create;
+
+  for i := 0 to Count-1 do
+  begin
+    FCircularBuffer[i] := nil;
+  end;
+
+  FWritePos := 0;
+end;
+
+destructor TWCRESTWebCamFrames.Destroy;
+var
+  i : integer;
+begin
+  Lock;
+  try
+    for i := 0 to Count-1 do
+    begin
+      if Assigned(FCircularBuffer[i]) then
+         FCircularBuffer[i].DecReference;
+    end;
+    FreeAndNil(FCircularBuffer);
+  finally
+    Unlock;
+  end;
+
+  inherited Destroy;
+end;
+
+procedure TWCRESTWebCamFrames.Add(aFrame : TWCRESTWebCamStreamFrame);
+begin
+  Lock;
+  try
+    if Assigned(FCircularBuffer[FWritePos]) then
+    begin
+      FCircularBuffer[FWritePos].DecReference;
+    end;
+    FCircularBuffer[FWritePos] := aFrame;
+    Inc(FWritePos);
+    if FWritePos >= WEBCAM_FRAMES_BUFFER_SIZE then
+    begin
+      FWritePos := 0;
+    end;
+  finally
+    UnLock;
+  end;
 end;
 
 function TWCRESTWebCamFrames.GetActualFrame(const lstFrame : QWord
   ) : TWCRESTWebCamStreamFrame;
+var
+  i, pos : integer;
 begin
-  Result := TWCRESTWebCamStreamFrame(FindValue(@IsActual, @lstFrame));
+  Result := nil;
+
+  Lock;
+  try
+    pos := FWritePos;
+
+    for i := 0 to WEBCAM_FRAMES_BUFFER_MASK-1 do
+    begin
+      inc(pos);
+      pos := pos and WEBCAM_FRAMES_BUFFER_MASK;
+      if Assigned(FCircularBuffer[pos]) then
+      begin
+        if FCircularBuffer[pos].FrameID > lstFrame then
+        begin
+           Result := FCircularBuffer[pos];
+           break;
+        end;
+      end;
+    end;
+  finally
+    UnLock;
+  end;
 end;
 
 { TWCRESTWebCamStreamFrame }
@@ -410,7 +498,7 @@ begin
   finally
     UnLock;
   end;
-  FFrames.Push_back(FActiveFrame);
+  FFrames.Add(FActiveFrame);
 end;
 
 constructor TWCRESTWebCamStream.Create(aRef : TWCHTTP2Stream; aSID : Cardinal;
@@ -447,7 +535,6 @@ begin
     FHTTP2S.DecReference;
 
     FFrameBuffer.Free;
-    FFrames.Clean;
     FFrames.Free;
     FChunks.Free;
   finally
@@ -583,17 +670,9 @@ begin
   end;
 end;
 
-procedure TWCRESTWebCamStream.ClearOld(obj : TObject; data : Pointer);
-begin
-  if (Int64(PQWord(data)^) - Int64(TWCRESTWebCamStreamFrame(obj).FrameID)) > 10 then
-    TWCRESTWebCamStreamFrame(obj).DecReference;
-end;
-
 procedure TWCRESTWebCamStream.DoIdle;
 begin
-  if Assigned(FActiveFrame) then
-    FFrames.DoForAllEx(@ClearOld, @FFrameID);
-  FFrames.CleanDead;
+  // Do Nothing
 end;
 
 { TWCRESTWebCamStreams }
