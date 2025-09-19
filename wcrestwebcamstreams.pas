@@ -249,7 +249,6 @@ begin
       if Assigned(FCircularBuffer[i]) then
          FCircularBuffer[i].DecReference;
     end;
-    FreeAndNil(FCircularBuffer);
   finally
     Unlock;
   end;
